@@ -58,6 +58,7 @@ const NEQUI = soloDigitos(NEGOCIO.nequi);
 const TELEFONO = String(NEGOCIO.telefono || "").trim();
 const LOCAL = String(NEGOCIO.direccionLocal || "").trim();
 const IMAGEN_MENU = String(NEGOCIO.imagenMenu || "").trim();
+const CATALOGO_WA = soloDigitos(NEGOCIO.catalogoWhatsApp); // ID del catálogo de Meta (opcional): activa el carrito de WhatsApp
 const INFORMACION = String(NEGOCIO.informacion || "").trim();
 const TIEMPO_BASE = String(NEGOCIO.tiempoEntrega || "30 a 40 minutos").trim();
 let tiempoEntrega = TIEMPO_BASE;
@@ -129,9 +130,14 @@ function validarProductos(lista) {
     const nota = String(p.nota || "").trim();
     const clave = `${id}|${norm(nota)}`;
     const previo = mapa.get(clave);
-    mapa.set(clave, { id, cantidad: (previo?.cantidad || 0) + cantidad, nota });
+    if (!previo) mapa.set(clave, { id, cantidad, nota, vistas: new Set([cantidad]) });
+    else if (!previo.vistas.has(cantidad)) {
+      // "2 pasteles y otros 3" en líneas distintas: se suman. Una línea repetida idéntica (error del modelo): se ignora.
+      previo.cantidad += cantidad;
+      previo.vistas.add(cantidad);
+    }
   }
-  return { carrito: [...mapa.values()], quitados: [...quitados] };
+  return { carrito: [...mapa.values()].map(({ id, cantidad, nota }) => ({ id, cantidad, nota })), quitados: [...quitados] };
 }
 
 const nombreItem = (i) => `${PRODUCTOS[i.id].nombre}${i.nota ? ` (${i.nota})` : ""}`;
@@ -179,20 +185,47 @@ function textoTarifas() {
   return min === max ? (min ? pesos(min) : "gratis") : `desde ${pesos(min)} según el barrio`;
 }
 
+// Menú: lo principal (pasteles, empanadas, combos) con detalle; bebidas y salsas en una línea al final.
+// Los sabores no se listan aquí: el bot los pregunta cuando el cliente pide ese producto.
+const minuscula = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+const esCategoria = (cat, palabra) => norm(cat).includes(palabra);
+
 function menuTexto() {
   const grupos = new Map();
-  for (const [id, p] of Object.entries(PRODUCTOS)) {
-    const linea = agotados.has(id)
-      ? `• ${p.nombre}: agotado hoy 😔`
-      : `• ${p.nombre}: ${pesos(p.precio)}${p.opciones?.length ? `\n   (${p.opciones.join(", ")})` : ""}`;
-    grupos.set(p.categoria, [...(grupos.get(p.categoria) || []), linea]);
+  for (const id of IDS) {
+    const cat = PRODUCTOS[id].categoria;
+    grupos.set(cat, [...(grupos.get(cat) || []), id]);
   }
-  let t = "";
-  for (const [cat, lineas] of grupos) t += `*${cat}*\n${lineas.join("\n")}\n\n`;
-  if (SALSAS.incluidas?.length) t += `🌶️ Incluido gratis: ${SALSAS.incluidas.join(" o ")}\n`;
-  if (textoTarifas()) t += `🛵 Domicilio: ${textoTarifas()}\n`;
-  if (PEDIDO_MINIMO) t += `Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}\n`;
-  return t.trim();
+  const principales = [];
+  const alFinal = [];
+  let salsaExtra = null;
+  for (const [cat, ids] of grupos) {
+    const disponibles = ids.filter((id) => !agotados.has(id));
+    if (esCategoria(cat, "bebida")) {
+      if (disponibles.length) {
+        const desde = Math.min(...disponibles.map((id) => PRODUCTOS[id].precio));
+        alFinal.push(`🥤 Bebidas: ${disponibles.map((id) => minuscula(PRODUCTOS[id].corto || PRODUCTOS[id].nombre)).join(", ")} (desde ${pesos(desde)})`);
+      }
+      continue;
+    }
+    if (esCategoria(cat, "salsa")) {
+      if (disponibles.length) salsaExtra = Math.min(...disponibles.map((id) => PRODUCTOS[id].precio));
+      continue;
+    }
+    const lineas = ids.map((id) => {
+      const p = PRODUCTOS[id];
+      const nombre = p.corto || p.nombre;
+      if (agotados.has(id)) return `• ${nombre}: agotado hoy 😔`;
+      return `• ${nombre} — ${pesos(p.precio)}${p.descripcion ? `\n   _${p.descripcion}_` : ""}`;
+    });
+    principales.push(`*${cat}*\n${lineas.join("\n")}`);
+  }
+  if (SALSAS.incluidas?.length) {
+    alFinal.push(`🌶️ Incluye ${SALSAS.incluidas.map(minuscula).join(" o ")}${salsaExtra != null ? ` (porción extra ${pesos(salsaExtra)})` : ""}`);
+  }
+  if (textoTarifas()) alFinal.push(`🛵 Domicilio: ${textoTarifas()}`);
+  if (PEDIDO_MINIMO) alFinal.push(`Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}`);
+  return unir(principales.join("\n\n"), alFinal.join("\n"));
 }
 
 // ======================= HORARIO =======================
@@ -258,6 +291,7 @@ function obtenerCliente(num, nombrePerfil) {
       ofrecioBebida: false,
       pidioUbicacion: false,
       menuEnviado: 0,
+      desdeLista: null,
       estado: "armando", // armando | esperando_confirmacion | confirmado
       resumenEnviado: 0,
       recordoConfirmacion: false,
@@ -360,8 +394,21 @@ async function enviar(to, payload) {
   } catch (e) {
     const err = e.response?.data?.error;
     console.error(`Error enviando a ${to}:`, JSON.stringify(err || e.message));
+    alertaToken(err?.code);
     return { ok: false, codigo: err?.code };
   }
+}
+
+// Si el token de WhatsApp venció o no tiene permisos, dejarlo MUY claro en los logs (máximo una vez cada 10 min)
+let ultimaAlertaToken = 0;
+function alertaToken(codigo) {
+  if (![190, 131005, 10, 200].includes(Number(codigo))) return;
+  if (Date.now() - ultimaAlertaToken < 10 * 60 * 1000) return;
+  ultimaAlertaToken = Date.now();
+  console.error(
+    "\n🚨🚨🚨 EL TOKEN DE WHATSAPP NO SIRVE (venció o no tiene permisos). El bot recibe mensajes pero NO puede responder.\n" +
+      "   Arreglo: genera un token nuevo (ideal: el permanente del usuario del sistema) y ponlo en Railway → Variables → WHATSAPP_TOKEN.\n"
+  );
 }
 const enviarTexto = (to, texto) => enviar(to, { type: "text", text: { body: cortar(texto, 4000), preview_url: false } });
 
@@ -401,33 +448,78 @@ async function marcarLeido(id) {
   }
 }
 
-async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
-  if (IMAGEN_MENU) await enviar(c.num, { type: "image", image: { link: IMAGEN_MENU, caption: cortar(intro, 1000) } });
-  const cuerpo = `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n¿Qué se te antoja? Escríbeme o elige aquí 👇`;
-  recordar(c, "assistant", cuerpo);
-  c.menuEnviado = ahora();
+const tituloCategoria = (cat, max) => cortar(String(cat).replace(/^[^\p{L}\p{N}]+/u, "").trim() || "Menú", max);
+const CONSEJO_TODO_JUNTO = "💡 También puedes escribirme todo junto, ej: *2 pasteles, 4 clásicas y una Coca-Cola*";
+
+// Lista de WhatsApp para elegir con un toque (máximo 10 productos)
+async function enviarLista(c, cuerpo, boton = "🛒 Elegir producto") {
   const filas = IDS.filter((id) => PRODUCTOS[id].enLista && !agotados.has(id)).slice(0, 10);
-  if (filas.length) {
-    const secciones = new Map();
-    for (const id of filas) {
-      const p = PRODUCTOS[id];
-      const titulo = cortar(String(p.categoria).replace(/^[^\p{L}\p{N}]+/u, "").trim() || "Menú", 24);
-      secciones.set(titulo, [
-        ...(secciones.get(titulo) || []),
-        { id: `prod:${id}`, title: cortar(p.corto || p.nombre, 24), description: cortar(pesos(p.precio), 72) },
-      ]);
-    }
-    const r = await enviar(c.num, {
-      type: "interactive",
-      interactive: {
-        type: "list",
-        body: { text: cortar(cuerpo, 4096) },
-        action: { button: "🛒 Elegir producto", sections: [...secciones].map(([title, rows]) => ({ title, rows })) },
-      },
-    });
-    if (r.ok) return r;
+  if (!filas.length) return { ok: false };
+  const secciones = new Map();
+  for (const id of filas) {
+    const p = PRODUCTOS[id];
+    const titulo = tituloCategoria(p.categoria, 24);
+    secciones.set(titulo, [
+      ...(secciones.get(titulo) || []),
+      { id: `prod:${id}`, title: cortar(p.corto || p.nombre, 24), description: cortar(`${p.descripcion ? p.descripcion + " · " : ""}${pesos(p.precio)}`, 72) },
+    ]);
   }
-  return enviarTexto(c.num, cuerpo);
+  return enviar(c.num, {
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: cortar(cuerpo, 4096) },
+      action: { button: cortar(boton, 20), sections: [...secciones].map(([title, rows]) => ({ title, rows })) },
+    },
+  });
+}
+
+// Carrito nativo de WhatsApp (si hay catálogo de Meta): el cliente agrega varias cosas y lo envía de una vez
+async function enviarCatalogo(c, intro) {
+  if (!CATALOGO_WA) return { ok: false };
+  const secciones = new Map();
+  for (const id of IDS.filter((i) => !agotados.has(i))) {
+    const titulo = tituloCategoria(PRODUCTOS[id].categoria, 24);
+    secciones.set(titulo, [...(secciones.get(titulo) || []), { product_retailer_id: id }]);
+  }
+  return enviar(c.num, {
+    type: "interactive",
+    interactive: {
+      type: "product_list",
+      header: { type: "text", text: "Menú CRUJI 🥟" },
+      body: { text: cortar(`${intro}\n\nAgrega al carrito todo lo que quieras 🛒 y me lo envías.`, 1024) },
+      footer: { text: "O escríbeme tu pedido 😊" },
+      action: { catalog_id: CATALOGO_WA, sections: [...secciones].slice(0, 10).map(([title, product_items]) => ({ title, product_items: product_items.slice(0, 30) })) },
+    },
+  });
+}
+
+async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
+  // 1) Con catálogo de Meta: carrito nativo (varias cosas a la vez, con fotos)
+  const cat = await enviarCatalogo(c, intro);
+  if (cat.ok) {
+    recordar(c, "assistant", `${intro}\n[Se envió el catálogo con carrito]`);
+    c.menuEnviado = ahora();
+    return cat;
+  }
+  // 2) Sin catálogo: foto del menú (opcional) + carta en texto con lista para elegir
+  if (IMAGEN_MENU) await enviar(c.num, { type: "image", image: { link: IMAGEN_MENU, caption: cortar(intro, 1000) } });
+  const cuerpo = `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n${CONSEJO_TODO_JUNTO}\n\n¿Qué se te antoja? Escríbeme o elige aquí 👇`;
+  recordar(c, "assistant", cuerpo);
+  let r = await enviarLista(c, cuerpo);
+  if (!r.ok) r = await enviarTexto(c.num, cuerpo);
+  if (r.ok) c.menuEnviado = ahora(); // solo cuenta como "ya lo vio" si de verdad le llegó
+  return r;
+}
+
+// Después de elegir algo de la lista: "¿Algo más?" con la lista otra vez, hasta que diga "listo"
+async function preguntarAlgoMas(c, pre = "") {
+  const texto = `${pre}Anotado: ${listaCarrito(c.carrito)} ✅\n¿Algo más? Elige otro producto 👇 o escribe *listo* para seguir.`;
+  c.paso = "mas";
+  c.pasoVeces = 0;
+  recordar(c, "assistant", texto);
+  const r = await enviarLista(c, texto, "➕ Agregar algo");
+  return r.ok ? r : enviarTexto(c.num, texto);
 }
 
 // ---------- Avisos al equipo (con reintento si WhatsApp no los entrega) ----------
@@ -595,6 +687,7 @@ Reglas de productos:
 - Si no dice la cantidad, pregúntala (falta_aclarar = true).
 - Si el producto tiene opciones, pon la elegida en "nota" (ej: "Coca-Cola"). Varias opciones del mismo producto = una línea por opción (2 de Coca-Cola y 1 de manzana = dos líneas).
 - "nota" también sirve para indicaciones de ese producto (ej: "bien doraditas"). Si no hay, "".
+- NUNCA repitas un producto en la lista: cada producto (con su nota) va UNA sola vez con la cantidad TOTAL (si tenía 5 clásicas y no las cambia, siguen siendo 5).
 - Si pide algo que no vendemos, dilo con amabilidad y ofrece lo que hay.
 
 INFORMACIÓN DEL NEGOCIO (es lo único que sabes; no inventes nada más):
@@ -754,8 +847,10 @@ async function saludar(c) {
   return responder(c, `${hola} ¿Qué se te antoja hoy? 😊 (Si quieres ver el menú otra vez, escribe *menú*)`);
 }
 
-const FLUJO = new Set(["aclarar", "opcion", "minimo", "bebida", "direccion", "ubicacion", "pago", "cambio"]);
+const FLUJO = new Set(["aclarar", "opcion", "mas", "minimo", "bebida", "direccion", "ubicacion", "pago", "cambio"]);
+const LISTO = /^(listo|ya|ya esta|eso|eso es todo|eso seria todo|nada mas|nada|seguir|sigamos|continuar|no|no gracias|no mas|asi esta bien|solo eso|terminar|termine)$/;
 const RECORDATORIO_PASO = {
+  mas: "¿Algo más? Elige del menú o escribe *listo* para seguir 😊",
   direccion: "Cuando puedas, me pasas la dirección 🏠",
   ubicacion: "Si puedes, me mandas tu ubicación 📍 (si no, dime y seguimos)",
   pago: "Y me cuentas cómo vas a pagar 💵",
@@ -818,6 +913,12 @@ async function siguientePaso(c, r, avisos = []) {
   if (sinOpcion) {
     const p = PRODUCTOS[sinOpcion.id];
     return pregunta(c, "opcion", `${pre}Para ${sinOpcion.cantidad}x ${p.nombre}, ¿de cuál? Tenemos: ${p.opciones.join(", ")}`);
+  }
+
+  // Venía eligiendo de la lista: ofrecer agregar otra cosa antes de seguir
+  if (c.desdeLista) {
+    c.desdeLista = null;
+    return preguntarAlgoMas(c, pre);
   }
 
   const lista = listaCarrito(c.carrito);
@@ -1220,6 +1321,8 @@ async function procesarTurno(c, entrada) {
     const p = PRODUCTOS[entrada.producto];
     c.paso = "aclarar";
     c.pasoVeces = 0;
+    c.desdeLista = entrada.producto;
+    if (c.estado === "esperando_confirmacion") c.estado = "armando";
     return responder(c, `¡Buena elección! 😋 ${p.nombre}: ¿cuántos quieres?${p.opciones?.length ? `\nY dime de cuál: ${p.opciones.join(", ")}` : ""}`);
   }
 
@@ -1239,11 +1342,20 @@ async function procesarTurno(c, entrada) {
   }
 
   if (entrada.carritoCatalogo) {
-    const { carrito, quitados } = validarProductos(entrada.carritoCatalogo);
-    if (carrito.length) {
-      c.carrito = carrito;
+    const { carrito: nuevos, quitados } = validarProductos(entrada.carritoCatalogo);
+    if (nuevos.length) {
+      // Se suma a lo que ya llevaba (por si pidió algo por chat antes de usar el carrito)
+      const suma = new Map(c.carrito.map((i) => [`${i.id}|${norm(i.nota)}`, { ...i }]));
+      for (const i of nuevos) {
+        const k = `${i.id}|${norm(i.nota)}`;
+        if (suma.has(k)) suma.get(k).cantidad += i.cantidad;
+        else suma.set(k, { ...i });
+      }
+      c.carrito = [...suma.values()];
       c.estado = "armando";
-      return siguientePaso(c, null, quitados.length ? [`Uy, hoy se nos acabó: ${quitados.join(", ")} 😔`] : []);
+      const avisos = [`¡Recibí tu carrito! 🛒 ${listaCarrito(c.carrito)}`];
+      if (quitados.length) avisos.push(`Uy, hoy se nos acabó: ${quitados.join(", ")} 😔`);
+      return siguientePaso(c, null, avisos);
     }
   }
 
@@ -1259,6 +1371,10 @@ async function procesarTurno(c, entrada) {
     if (c.carrito.length) return siguientePaso(c, null);
   }
 
+  // "Listo" después de "¿Algo más?": seguir con el pedido sin gastar modelo
+  if (c.paso === "mas" && c.estado === "armando" && c.carrito.length && LISTO.test(norm(texto).replace(/[!¡.,;]+/g, "").trim())) {
+    return siguientePaso(c, null);
+  }
   // "No, así está bien" después de ofrecer bebida: seguir sin gastar modelo
   if (c.paso === "bebida" && c.estado === "armando" && c.carrito.length && esNegacion(texto)) return siguientePaso(c, null);
   // "No tengo datos / no sé cómo" al pedir la ubicación: seguir sin ella
