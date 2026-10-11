@@ -15,9 +15,13 @@
  *   categoria   para agrupar el menú (las bebidas deben tener "Bebidas" en la categoría)
  *   alias       otras formas en que la gente lo pide (en minúscula y sin tildes)
  *   opciones    (opcional) sabores o variantes; si el cliente no dice cuál, el bot pregunta
+ *   descripcion (opcional) lo que trae, en pocas palabras; sale en el menú y en la lista (ej: "2 pasteles + 4 clásicas")
  *   detalle     (opcional) aclaración que el bot puede usar al responder
  *   incluyeBebida (opcional) true si ya trae bebida (así el bot no ofrece bebida aparte)
  *   enLista     true si aparece en la lista para elegir con un toque (máximo 10 en total)
+ *
+ * Cómo se ve el menú: las categorías principales (pasteles, combos) salen con detalle y en el orden de
+ * este archivo. Las categorías que dicen "Bebidas" o "Salsas" se resumen en una línea al final.
  *
  * Para quitar un producto, borra su bloque completo.
  * Para agotar algo solo por hoy, NO lo borres: usa /agotado desde el celular de cocina.
@@ -48,6 +52,7 @@ export const PRODUCTOS = {
     precio: 2800,
     categoria: "🥟 Pasteles y empanadas",
     alias: ["tradicional", "tradicionales", "pipian", "de pipian"],
+    descripcion: "De pipián",
     detalle: "Es la empanada de pipián.",
     enLista: true,
   },
@@ -56,6 +61,7 @@ export const PRODUCTOS = {
   combo_norte: {
     nombre: "Combo Norte (2 pasteles + 4 clásicas)",
     corto: "Combo Norte",
+    descripcion: "2 pasteles + 4 empanadas clásicas",
     precio: 24000,
     categoria: "🎁 Combos",
     alias: ["combo norte", "combo"],
@@ -64,6 +70,7 @@ export const PRODUCTOS = {
   combo_familiar: {
     nombre: "Combo Familiar (6 pasteles + gaseosa 1.5 L)",
     corto: "Combo Familiar",
+    descripcion: "6 pasteles + gaseosa 1.5 L",
     precio: 38000, // ⚠️ precio de ejemplo
     categoria: "🎁 Combos",
     alias: ["combo familiar", "familiar"],
@@ -178,6 +185,13 @@ export const NEGOCIO = {
   // Foto del menú (opcional): un enlace público a una imagen JPG o PNG.
   // Puedes subirla a Supabase Storage (bucket público) y pegar aquí el enlace.
   imagenMenu: "",
+
+  // Catálogo de WhatsApp (opcional, lo más bonito): el cliente ve fotos, agrega varias cosas a un carrito y lo envía.
+  // 1. Crea el catálogo en Commerce Manager (business.facebook.com/commerce) y agrega cada producto con foto y precio.
+  // 2. En cada producto, el "ID de contenido" (o SKU) debe ser EXACTAMENTE el id de arriba (ej: pastel_pollo).
+  // 3. Conecta el catálogo a tu cuenta de WhatsApp (WhatsApp Manager → Catálogo).
+  // 4. Pega aquí el número del catálogo. Si lo dejas vacío, el bot usa la lista normal.
+  catalogoWhatsApp: "",
 
   // Respuestas a preguntas frecuentes. El bot SOLO responde lo que esté aquí;
   // lo que no sepa se lo pasa a una persona. Escribe frases cortas.
