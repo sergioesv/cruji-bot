@@ -20,6 +20,7 @@ const {
   WHATSAPP_TOKEN,
   PHONE_ID,
   GROQ_API_KEY,
+  GROQ_MODEL = "openai/gpt-oss-120b",
   VERIFY_TOKEN = "cruji123",
   APP_SECRET,
   MI_NUMERO_COCINA,
@@ -113,16 +114,19 @@ Responde SOLO con JSON válido:
 {"productos":[{"id":"pastel_pollo","cantidad":2}],"barrio":"Ciudad Jardín o vacío","respuesta":"texto para el cliente"}`;
 
 async function interpretar(numero) {
-  const r = await axios.post(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" },
-      temperature: 0.3,
-      messages: [{ role: "system", content: SYSTEM_PROMPT }, ...(historial.get(numero) || [])],
-    },
-    { headers: { Authorization: `Bearer ${GROQ_API_KEY}` }, timeout: 20000 }
-  );
+  const body = {
+    model: GROQ_MODEL,
+    response_format: { type: "json_object" },
+    temperature: 0.3,
+    messages: [{ role: "system", content: SYSTEM_PROMPT }, ...(historial.get(numero) || [])],
+  };
+  // Los modelos gpt-oss razonan; en "low" responden rapido
+  if (GROQ_MODEL.startsWith("openai/gpt-oss")) body.reasoning_effort = "low";
+
+  const r = await axios.post("https://api.groq.com/openai/v1/chat/completions", body, {
+    headers: { Authorization: `Bearer ${GROQ_API_KEY}` },
+    timeout: 30000,
+  });
   return JSON.parse(r.data.choices[0].message.content);
 }
 
@@ -239,6 +243,7 @@ app.post("/webhook", (req, res) => {
 
   const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
   if (!message || yaVisto(message.id)) return;
+  console.log(`Mensaje recibido de ${message.from} (${message.type})`);
 
   procesarMensaje(message).catch((e) =>
     console.error("Error procesando mensaje:", e.response?.data || e.message)
