@@ -10,12 +10,12 @@
  *   APP_SECRET       (opcional) App Secret de Meta, activa la validacion de firma
  *   MI_NUMERO_COCINA (opcional) numero con 57 adelante, para el aviso de pedidos
  */
- 
+
 import express from "express";
 import axios from "axios";
 import FormData from "form-data";
 import crypto from "crypto";
- 
+
 const {
   WHATSAPP_TOKEN,
   PHONE_ID,
@@ -25,9 +25,9 @@ const {
   APP_SECRET,
   MI_NUMERO_COCINA,
 } = process.env;
- 
+
 const GRAPH = "https://graph.facebook.com/v22.0";
- 
+
 // ---------- MENU Y PRECIOS (el total se calcula aqui, no el modelo) ----------
 const MENU = {
   pastel_pollo: { nombre: "Pastel de pollo", precio: 5500 },
@@ -36,25 +36,25 @@ const MENU = {
   combo_norte: { nombre: "Combo Norte (2 pasteles + 4 clásicas)", precio: 24000 },
 };
 const BARRIOS = ["Ciudad Jardín", "La Paz", "Santa Clara", "El Recuerdo"];
- 
+
 const pesos = (n) => "$" + n.toLocaleString("es-CO");
- 
+
 function menuTexto() {
   const lineas = Object.values(MENU).map((p) => `• ${p.nombre}: ${pesos(p.precio)}`);
   return `Esto es lo que tenemos:\n${lineas.join("\n")}\n(Hay ají de maní 😉) ¿Qué se te antoja?`;
 }
- 
+
 // ---------- MEMORIA POR CLIENTE (en RAM; se pierde si el servidor reinicia) ----------
 const historial = new Map(); // numero -> [{role, content}]
 const MAX_MSGS = 10;
- 
+
 function recordar(numero, role, content) {
   const h = historial.get(numero) || [];
   h.push({ role, content });
   while (h.length > MAX_MSGS) h.shift();
   historial.set(numero, h);
 }
- 
+
 // ---------- DEDUPLICACION (Meta a veces reenvia el mismo mensaje) ----------
 const vistos = new Set();
 function yaVisto(id) {
@@ -63,7 +63,7 @@ function yaVisto(id) {
   if (vistos.size > 2000) vistos.delete(vistos.values().next().value);
   return false;
 }
- 
+
 // ---------- WHATSAPP ----------
 async function enviarWhatsApp(to, body) {
   try {
@@ -76,7 +76,7 @@ async function enviarWhatsApp(to, body) {
     console.error("Error enviando WhatsApp a", to, JSON.stringify(e.response?.data || e.message));
   }
 }
- 
+
 async function transcribirAudio(audioId) {
   const meta = await axios.get(`${GRAPH}/${audioId}`, {
     headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
@@ -94,30 +94,30 @@ async function transcribirAudio(audioId) {
   });
   return r.data.text?.trim() || "";
 }
- 
+
 // ---------- CEREBRO ----------
 const SYSTEM_PROMPT = `Eres el asistente de pedidos de CRUJI, empanadas y pasteles del norte de Popayán.
 Tono: amiguero, cálido, cercano, colombiano neutro, sin jerga paisa. Máximo 2 líneas y 1 emoji suave.
- 
+
 Productos (usa SOLO estos ids):
 - pastel_pollo
 - empanada_clasica
 - sabor_tradicional
 - combo_norte (2 pasteles + 4 empanadas clásicas)
 También hay ají de maní.
- 
+
 Barrios con domicilio: ${BARRIOS.join(", ")}.
- 
+
 Tu trabajo: leer toda la conversación y devolver el pedido ACUMULADO (lo que el cliente quiere en total hasta ahora), aunque lo diga enredado.
 - Si falta el barrio, pídelo amable en "respuesta".
 - Si el barrio no está en la lista, di con amabilidad que por ahora solo llegan a esos barrios.
 - Si no queda claro qué producto quiere, pregunta.
 - NUNCA menciones precios ni totales en "respuesta"; eso lo calcula el sistema.
 - Si el cliente solo saluda o pregunta algo general, responde breve y pregunta qué desea pedir.
- 
+
 Responde SOLO con JSON válido:
 {"productos":[{"id":"pastel_pollo","cantidad":2}],"barrio":"Ciudad Jardín o vacío","respuesta":"texto para el cliente"}`;
- 
+
 async function interpretar(numero) {
   const body = {
     model: GROQ_MODEL,
@@ -127,7 +127,7 @@ async function interpretar(numero) {
   };
   // Los modelos gpt-oss razonan; en "low" responden rapido
   if (GROQ_MODEL.startsWith("openai/gpt-oss")) body.reasoning_effort = "low";
- 
+
   // Hasta 2 intentos: a veces el modelo devuelve JSON mal formado
   let ultimoError;
   for (let intento = 1; intento <= 2; intento++) {
@@ -146,7 +146,7 @@ async function interpretar(numero) {
   }
   throw ultimoError;
 }
- 
+
 function construirPedido(parsed) {
   const items = [];
   let total = 0;
@@ -160,12 +160,12 @@ function construirPedido(parsed) {
   const barrio = BARRIOS.find((b) => b.toLowerCase() === String(parsed.barrio || "").trim().toLowerCase());
   return { items, total, barrio };
 }
- 
+
 // ---------- PROCESO PRINCIPAL ----------
 async function procesarMensaje(message) {
   const from = message.from;
   let texto = "";
- 
+
   if (message.type === "audio") {
     console.log("Audio recibido de", from);
     texto = await transcribirAudio(message.audio.id);
@@ -176,14 +176,14 @@ async function procesarMensaje(message) {
     await enviarWhatsApp(from, "¡Hola! Por ahora entiendo texto y notas de voz 😊 ¿Qué se te antoja pedir?");
     return;
   }
- 
+
   if (!texto) {
     await enviarWhatsApp(from, "No alcancé a escucharte bien, ¿me lo repites por favor? 😊");
     return;
   }
- 
+
   recordar(from, "user", texto);
- 
+
   let parsed;
   try {
     parsed = await interpretar(from);
@@ -192,15 +192,15 @@ async function procesarMensaje(message) {
     await enviarWhatsApp(from, `Uy, se me enredó algo por un momento 😅\n${menuTexto()}`);
     return;
   }
- 
+
   const { items, total, barrio } = construirPedido(parsed);
- 
+
   // Pedido completo: productos + barrio valido -> confirma con total calculado aqui
   if (items.length > 0 && barrio) {
     const lista = items.map((i) => `${i.cantidad}x ${i.nombre}`).join(", ");
     const confirmacion = `¡Listo! ${lista} para ${barrio}. Total: ${pesos(total)}. Te llega en unos 15 minutos 😊`;
     await enviarWhatsApp(from, confirmacion);
- 
+
     if (MI_NUMERO_COCINA) {
       const aviso =
         `🔔 NUEVO PEDIDO CRUJI\nCliente: ${from}\nBarrio: ${barrio}\n` +
@@ -211,14 +211,14 @@ async function procesarMensaje(message) {
     historial.delete(from); // pedido cerrado, empieza limpio
     return;
   }
- 
+
   // Pedido incompleto: responde lo que genero el modelo (pide barrio o producto)
   let respuesta = parsed.respuesta || "¿Qué te gustaría pedir? 😊";
   if (parsed.mostrar_menu) respuesta += `\n\n${menuTexto()}`;
   recordar(from, "assistant", respuesta);
   await enviarWhatsApp(from, respuesta);
 }
- 
+
 // ---------- SERVIDOR ----------
 const app = express();
 app.use(
@@ -228,9 +228,9 @@ app.use(
     },
   })
 );
- 
+
 app.get("/", (_req, res) => res.send("CRUJI bot activo"));
- 
+
 // Verificacion del webhook
 app.get("/webhook", (req, res) => {
   if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === VERIFY_TOKEN) {
@@ -239,7 +239,7 @@ app.get("/webhook", (req, res) => {
   }
   return res.sendStatus(403);
 });
- 
+
 // Recepcion de mensajes
 app.post("/webhook", (req, res) => {
   // Validar firma de Meta si hay APP_SECRET
@@ -255,21 +255,18 @@ app.post("/webhook", (req, res) => {
       return res.sendStatus(401);
     }
   }
- 
+
   // Responder 200 YA para que Meta no reintente; se procesa despues
   res.sendStatus(200);
- 
+
   const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
   if (!message || yaVisto(message.id)) return;
   console.log(`Mensaje recibido de ${message.from} (${message.type})`);
- 
+
   procesarMensaje(message).catch((e) =>
     console.error("Error procesando mensaje:", e.response?.data || e.message)
   );
 });
- 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`CRUJI bot corriendo en puerto ${PORT}`));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`CRUJI bot corriendo en puerto ${PORT}`)); 
+app.listen(PORT, () => console.log(`CRUJI bot corriendo en puerto ${PORT}`));
