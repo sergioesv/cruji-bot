@@ -404,6 +404,7 @@ async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
   if (IMAGEN_MENU) await enviar(c.num, { type: "image", image: { link: IMAGEN_MENU, caption: cortar(intro, 1000) } });
   const cuerpo = `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n¿Qué se te antoja? Escríbeme o elige aquí 👇`;
   recordar(c, "assistant", cuerpo);
+  c.menuEnviado = ahora();
   const filas = IDS.filter((id) => PRODUCTOS[id].enLista && !agotados.has(id)).slice(0, 10);
   if (filas.length) {
     const secciones = new Map();
