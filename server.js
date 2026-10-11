@@ -36,8 +36,23 @@ const EQUIPO = [...new Set([COCINA, ...String(env.ADMINS || "").split(",").map(s
 const ENCARGADO = String(NEGOCIO.encargado || "").trim();
 const CON_QUIEN = ENCARGADO ? `con ${ENCARGADO}` : "con alguien del equipo";
 const A_QUIEN = ENCARGADO ? `a ${ENCARGADO}` : "al equipo";
-const BARRIOS = (NEGOCIO.barrios || []).map((b) => String(b).trim()).filter(Boolean);
-const COSTO_DOMICILIO = Number(NEGOCIO.costoDomicilio) || 0;
+// Barrios: puede ser una lista ["La Paz", ...] o un objeto { "La Paz": 2000, ... } con la tarifa de cada uno
+const TARIFAS = new Map();
+if (Array.isArray(NEGOCIO.barrios)) NEGOCIO.barrios.forEach((b) => TARIFAS.set(String(b).trim(), null));
+else Object.entries(NEGOCIO.barrios || {}).forEach(([b, v]) => TARIFAS.set(String(b).trim(), v === null || v === "" ? null : Number(v)));
+TARIFAS.delete("");
+const BARRIOS = [...TARIFAS.keys()];
+const COSTO_DOMICILIO = Number(NEGOCIO.costoDomicilio) || 0; // tarifa general si el barrio no tiene una propia
+// Cobro por distancia (opcional): ubicación del local + tabla de tarifas
+const LOCAL_GPS =
+  NEGOCIO.ubicacionLocal && Number.isFinite(Number(NEGOCIO.ubicacionLocal.lat)) && Number.isFinite(Number(NEGOCIO.ubicacionLocal.lng))
+    ? { lat: Number(NEGOCIO.ubicacionLocal.lat), lng: Number(NEGOCIO.ubicacionLocal.lng) }
+    : null;
+const TABLA_DISTANCIA = (NEGOCIO.tarifasPorDistancia || [])
+  .map((t) => ({ hastaKm: Number(t.hastaKm), valor: Number(t.valor) }))
+  .filter((t) => t.hastaKm > 0 && t.valor >= 0)
+  .sort((a, b) => a.hastaKm - b.hastaKm);
+const POR_DISTANCIA = Boolean(LOCAL_GPS && TABLA_DISTANCIA.length);
 const PEDIDO_MINIMO = Number(NEGOCIO.pedidoMinimo) || 0;
 const NEQUI = soloDigitos(NEGOCIO.nequi);
 const TELEFONO = String(NEGOCIO.telefono || "").trim();
@@ -123,10 +138,45 @@ const nombreItem = (i) => `${PRODUCTOS[i.id].nombre}${i.nota ? ` (${i.nota})` : 
 const listaCarrito = (carrito) => carrito.map((i) => `${i.cantidad}x ${nombreItem(i)}`).join(", ");
 const unidades = (carrito) => carrito.reduce((s, i) => s + i.cantidad, 0);
 
+// ---------- Domicilio dinámico ----------
+// Distancia en km por calles (aprox.): línea recta × 1.3
+function kmPorCalles(u) {
+  if (!LOCAL_GPS || !u) return null;
+  const rad = (g) => (g * Math.PI) / 180;
+  const dLat = rad(u.lat - LOCAL_GPS.lat);
+  const dLng = rad(u.lng - LOCAL_GPS.lng);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(rad(LOCAL_GPS.lat)) * Math.cos(rad(u.lat)) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.3;
+}
+// Devuelve { valor, detalle } o { fuera: true, km } si la ubicación está más lejos que la tabla
+function domicilioDe(c) {
+  if (c.entrega === "recoger") return { valor: 0, detalle: "" };
+  if (c.domicilioManual != null) return { valor: c.domicilioManual, detalle: c.barrio || "" };
+  if (POR_DISTANCIA && c.ubicacion) {
+    const km = kmPorCalles(c.ubicacion);
+    const tramo = TABLA_DISTANCIA.find((t) => km <= t.hastaKm);
+    if (!tramo) return { fuera: true, km };
+    return { valor: tramo.valor, detalle: `${km.toFixed(1).replace(".", ",")} km` };
+  }
+  const b = barrioCubierto(c);
+  if (b && TARIFAS.get(b) != null) return { valor: TARIFAS.get(b), detalle: b };
+  return { valor: COSTO_DOMICILIO, detalle: b || "" };
+}
+
 function calcular(c, carrito = c.carrito) {
   const subtotal = carrito.reduce((s, i) => s + PRODUCTOS[i.id].precio * i.cantidad, 0);
-  const domicilio = c.entrega === "recoger" ? 0 : COSTO_DOMICILIO;
-  return { subtotal, domicilio, total: subtotal + domicilio };
+  const d = domicilioDe(c);
+  const domicilio = d.fuera ? 0 : d.valor;
+  return { subtotal, domicilio, total: subtotal + domicilio, detalleDomicilio: d.detalle || "" };
+}
+
+function textoTarifas() {
+  if (POR_DISTANCIA) return `según la distancia (desde ${pesos(TABLA_DISTANCIA[0].valor)})`;
+  const valores = [...TARIFAS.values()].filter((v) => v != null);
+  if (!valores.length) return COSTO_DOMICILIO ? pesos(COSTO_DOMICILIO) : "";
+  const min = Math.min(...valores);
+  const max = Math.max(...valores);
+  return min === max ? (min ? pesos(min) : "gratis") : `desde ${pesos(min)} según el barrio`;
 }
 
 function menuTexto() {
@@ -140,7 +190,7 @@ function menuTexto() {
   let t = "";
   for (const [cat, lineas] of grupos) t += `*${cat}*\n${lineas.join("\n")}\n\n`;
   if (SALSAS.incluidas?.length) t += `🌶️ Incluido gratis: ${SALSAS.incluidas.join(" o ")}\n`;
-  if (COSTO_DOMICILIO) t += `🛵 Domicilio: ${pesos(COSTO_DOMICILIO)}\n`;
+  if (textoTarifas()) t += `🛵 Domicilio: ${textoTarifas()}\n`;
   if (PEDIDO_MINIMO) t += `Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}\n`;
   return t.trim();
 }
@@ -197,6 +247,7 @@ function obtenerCliente(num, nombrePerfil) {
       entrega: "domicilio",
       barrio: "",
       barrioAceptado: "",
+      domicilioManual: null,
       direccion: "",
       ubicacion: null,
       pago: "",
@@ -205,6 +256,7 @@ function obtenerCliente(num, nombrePerfil) {
       notas: "",
       preguntoPago: false,
       ofrecioBebida: false,
+      pidioUbicacion: false,
       estado: "armando", // armando | esperando_confirmacion | confirmado
       resumenEnviado: 0,
       recordoConfirmacion: false,
@@ -267,6 +319,7 @@ function reiniciarSiHaceFalta(c) {
     notas: "",
     preguntoPago: false,
     ofrecioBebida: false,
+    pidioUbicacion: false,
     estado: "armando",
     recordoConfirmacion: false,
     pedido: null,
@@ -504,7 +557,10 @@ function infoNegocio() {
   const l = [];
   l.push(BARRIOS.length ? `Domicilios a: ${BARRIOS.join(", ")}.` : "Hacemos domicilios.");
   l.push(`Tiempo de entrega aproximado: ${tiempoEntrega}.`);
-  if (COSTO_DOMICILIO) l.push(`Costo del domicilio: ${pesos(COSTO_DOMICILIO)}.`);
+  if (POR_DISTANCIA) l.push(`El domicilio se cobra según la distancia (desde ${pesos(TABLA_DISTANCIA[0].valor)}); el valor exacto sale en el resumen.`);
+  else if ([...TARIFAS.values()].some((v) => v != null)) {
+    l.push(`Costo del domicilio por barrio: ${[...TARIFAS].map(([b, v]) => `${b} ${v != null ? (v ? pesos(v) : "gratis") : "por confirmar"}`).join(", ")}.`);
+  } else if (COSTO_DOMICILIO) l.push(`Costo del domicilio: ${pesos(COSTO_DOMICILIO)}.`);
   if (PEDIDO_MINIMO) l.push(`Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}.`);
   l.push(NEQUI ? "Formas de pago: efectivo al recibir o Nequi." : "Forma de pago: efectivo al recibir.");
   if (LOCAL) l.push(`También se puede recoger en el local: ${LOCAL}.`);
@@ -664,9 +720,10 @@ const NEGACION =
   /^(no|nop|nel|no gracias|no gracias asi esta bien|asi esta bien|asi|listo|nada|nada mas|solo eso|eso es todo|eso seria todo|no por ahora|por ahora no|no senor|no senora|asi no mas|asi nomas|no asi esta bien)$/;
 const esNegacion = (t) => NEGACION.test(norm(t).replace(/[!¡.,;]+/g, "").trim());
 
-const FLUJO = new Set(["aclarar", "opcion", "minimo", "bebida", "direccion", "pago", "cambio"]);
+const FLUJO = new Set(["aclarar", "opcion", "minimo", "bebida", "direccion", "ubicacion", "pago", "cambio"]);
 const RECORDATORIO_PASO = {
   direccion: "Cuando puedas, me pasas la dirección 🏠",
+  ubicacion: "Si puedes, me mandas tu ubicación 📍 (si no, dime y seguimos)",
   pago: "Y me cuentas cómo vas a pagar 💵",
   opcion: "Y me dices de qué sabor 😊",
   aclarar: "Y me confirmas qué productos quieres 😊",
@@ -683,7 +740,7 @@ function barrioCubierto(c) {
 function datosCompletos(c) {
   if (!c.carrito.length) return false;
   if (c.carrito.some((i) => PRODUCTOS[i.id].opciones?.length && !i.nota)) return false;
-  if (c.entrega !== "recoger" && (!barrioCubierto(c) || (!c.direccion && !c.ubicacion))) return false;
+  if (c.entrega !== "recoger" && (!barrioCubierto(c) || (!c.direccion && !c.ubicacion) || domicilioDe(c).fuera)) return false;
   return Boolean(c.pago);
 }
 
@@ -760,22 +817,29 @@ async function siguientePaso(c, r, avisos = []) {
 
   if (domicilio) {
     if (!c.barrio) {
-      return pregunta(
-        c,
-        "direccion",
-        `${pre}Anotado: ${lista} ✅\n¿A dónde te lo llevamos? Dime el barrio, la dirección y una referencia 🏠${
-          BARRIOS.length ? `\n(Llegamos a ${BARRIOS.join(", ")})` : ""
-        }`
-      );
+      const llegamos = BARRIOS.length ? `\n(Llegamos a ${BARRIOS.join(", ")})` : "";
+      if (c.ubicacion) return pregunta(c, "direccion", `${pre}¿Y en qué barrio es? 🏠${llegamos}`);
+      return pregunta(c, "direccion", `${pre}Anotado: ${lista} ✅\n¿A dónde te lo llevamos? Dime el barrio, la dirección y una referencia 🏠${llegamos}`);
     }
     const cubierto = barrioCubierto(c);
     if (!cubierto) return barrioNoCubierto(c);
     c.barrio = cubierto;
+    const dom = domicilioDe(c);
+    if (dom.fuera) return barrioNoCubierto(c, `Su ubicación está a ${dom.km.toFixed(1).replace(".", ",")} km (más lejos que la tabla de tarifas)`);
     if (!c.direccion && !c.ubicacion) {
       return pregunta(
         c,
         "direccion",
         `${pre}¡Listo, ${cubierto}! ¿Me das la dirección exacta? (calle o carrera, número, casa o apto y una referencia). También puedes mandarme tu ubicación 📍`
+      );
+    }
+    // Dirección "de referencia" (sin números, ej: "la tienda de doña Mari"): pedir ubicación una vez, sin obligar
+    if (!c.ubicacion && !c.pidioUbicacion && c.direccion && !/\d/.test(c.direccion)) {
+      c.pidioUbicacion = true;
+      return pregunta(
+        c,
+        "ubicacion",
+        `${pre}¡Anotado! 📍 Si puedes, mándame tu ubicación (en el clip 📎 → Ubicación) para que el domiciliario llegue sin perderse. Si no puedes, no hay problema 😊`
       );
     }
   }
@@ -797,11 +861,11 @@ async function siguientePaso(c, r, avisos = []) {
 }
 
 async function enviarResumen(c, pre = "") {
-  const { domicilio, total } = calcular(c);
+  const { domicilio, total, detalleDomicilio } = calcular(c);
   const esCambio = Boolean(c.pedido);
   let txt = `${pre}${esCambio ? `📝 Así quedaría tu pedido #${c.pedido.codigo} con el cambio:` : "📝 Este es tu pedido:"}\n`;
   txt += c.carrito.map((i) => `• ${i.cantidad}x ${nombreItem(i)} — ${pesos(PRODUCTOS[i.id].precio * i.cantidad)}`).join("\n");
-  if (domicilio) txt += `\n• Domicilio — ${pesos(domicilio)}`;
+  if (domicilio) txt += `\n• Domicilio${detalleDomicilio ? ` (${detalleDomicilio})` : ""} — ${pesos(domicilio)}`;
   txt += `\n*Total: ${pesos(total)}*`;
   txt += `\n${textoEntrega(c)}`;
   txt += `\n${textoPago(c, total)}`;
@@ -818,11 +882,30 @@ async function enviarResumen(c, pre = "") {
   return enviarBotones(c.num, txt, BOTONES_RESUMEN);
 }
 
+const mapa = (u) => `https://maps.google.com/?q=${u.lat},${u.lng}`;
+const telLocal = (num) => (num.startsWith("57") && num.length === 12 ? `${num.slice(2, 5)} ${num.slice(5, 8)} ${num.slice(8)}` : num);
+
+// Tarjeta lista para reenviar al domiciliario
+function textoDomiciliario(p, c, actualizado = false) {
+  let t = `🛵 DOMICILIO #${p.codigo}${actualizado ? " (ACTUALIZADO)" : ""} — CRUJI\n`;
+  t += `👤 ${c.nombre || "Cliente"} — ${telLocal(c.num)}\n💬 wa.me/${c.num}\n`;
+  t += `📍 ${p.barrio}${p.direccion ? " — " + p.direccion : ""}\n`;
+  t += p.ubicacion ? `🗺️ ${mapa(p.ubicacion)}\n` : "🗺️ Sin ubicación GPS: si no encuentras, llama al cliente\n";
+  if (p.pago === "nequi") t += `💜 Pago por Nequi (${pesos(p.total)}): confirma con cocina antes de entregar\n`;
+  else {
+    t += `💵 Cobrar: ${pesos(p.total)}`;
+    if (p.pagaCon > p.total) t += ` (paga con ${pesos(p.pagaCon)} → cambio ${pesos(p.pagaCon - p.total)})`;
+    t += "\n";
+  }
+  if (p.notas) t += `📝 ${p.notas}\n`;
+  return t.trim();
+}
+
 function textoCocina(p, anterior, c) {
   const enc = anterior ? `✏️ CAMBIO EN PEDIDO #${p.codigo}` : `🔔 PEDIDO #${p.codigo} — CRUJI`;
   let t = `${enc}\n👤 ${c.nombre || "Cliente"} — wa.me/${c.num}\n`;
   t += p.entrega === "recoger" ? "🏪 RECOGE EN EL LOCAL\n" : `📍 ${p.barrio}${p.direccion ? " — " + p.direccion : ""}\n`;
-  if (p.ubicacion) t += `🗺️ https://maps.google.com/?q=${p.ubicacion.lat},${p.ubicacion.lng}\n`;
+  if (p.ubicacion) t += `🗺️ ${mapa(p.ubicacion)}\n`;
   t += p.items.map((i) => `• ${i.cantidad}x ${nombreItem(i)}`).join("\n") + "\n";
   if (p.salsas) t += `🌶️ ${p.salsas}\n`;
   if (p.notas) t += `📝 ${p.notas}\n`;
@@ -835,6 +918,7 @@ function textoCocina(p, anterior, c) {
   if (unidades(p.items) >= 30) t += `⚠️ Pedido grande: ${unidades(p.items)} unidades\n`;
   if (anterior) t += `\n(Antes: ${anterior.lista} — ${pesos(anterior.total)})\n`;
   t += `\nCuando salga: /salio ${p.codigo}`;
+  if (p.entrega !== "recoger") t += `\n👇 El siguiente mensaje es para reenviar al domiciliario`;
   return t;
 }
 
@@ -892,6 +976,7 @@ async function confirmarPedido(c) {
   }
   await responder(c, msg);
   await avisarEquipo(textoCocina(c.pedido, anterior, c));
+  if (c.pedido.entrega !== "recoger") await avisarEquipo(textoDomiciliario(c.pedido, c, Boolean(anterior)));
 }
 
 function restaurarDesdePedido(c) {
@@ -914,7 +999,7 @@ function restaurarDesdePedido(c) {
 async function cancelarPorCliente(c, r) {
   if (!c.pedido) {
     if (!c.carrito.length) return responder(c, r?.respuesta || "¡Listo! 😊 Si se te antoja algo, aquí estoy.");
-    Object.assign(c, { carrito: [], estado: "armando", paso: "", pasoVeces: 0, ofrecioBebida: false, preguntoPago: false });
+    Object.assign(c, { carrito: [], estado: "armando", paso: "", pasoVeces: 0, ofrecioBebida: false, preguntoPago: false, pidioUbicacion: false });
     return responder(c, "Listo, no te tomo el pedido 👍 Si se te antoja algo más tarde, aquí estoy 😊");
   }
   const p = c.pedido;
@@ -948,14 +1033,16 @@ async function responderEstado(c) {
   });
 }
 
-async function barrioNoCubierto(c) {
+async function barrioNoCubierto(c, porDistancia = "") {
   const b = c.barrio;
-  return pasarAHumano(c, `Barrio fuera de cobertura: ${b}`, {
+  const codigo = codigoDe(c);
+  const recoger = LOCAL ? `\nSi prefieres, también puedes recogerlo en ${LOCAL}.` : "";
+  return pasarAHumano(c, porDistancia || `Barrio fuera de cobertura: ${b}`, {
     tipo: "pedido",
-    mensaje: `Todavía no tenemos domicilio fijo en ${b} 😔 pero déjame consultarlo: le paso tu pedido ${A_QUIEN} y te confirma en unos minutos si podemos llegar.${
-      LOCAL ? `\nSi prefieres, también puedes recogerlo en ${LOCAL}.` : ""
-    }`,
-    extra: `Si sí llegan: /aceptar ${codigoDe(c)}`,
+    mensaje: porDistancia
+      ? `Tu ubicación queda un poco lejos de nuestra zona 😅 pero déjame consultarlo: le paso tu pedido ${A_QUIEN} y te confirma en unos minutos si podemos llegar y cuánto sale el domicilio.${recoger}`
+      : `Todavía no tenemos domicilio fijo en ${b} 😔 pero déjame consultarlo: le paso tu pedido ${A_QUIEN} y te confirma en unos minutos si podemos llegar.${recoger}`,
+    extra: `Si sí llegan, escribe el valor del domicilio: /aceptar ${codigo} 4000`,
   });
 }
 
@@ -1102,6 +1189,21 @@ async function procesarTurno(c, entrada) {
     return responder(c, `¡Buena elección! 😋 ${p.nombre}: ¿cuántos quieres?${p.opciones?.length ? `\nY dime de cuál: ${p.opciones.join(", ")}` : ""}`);
   }
 
+  // Ubicación GPS: se aprovecha según el momento del pedido
+  if (entrada.ubicacion && c.ubicacion) {
+    const p = c.pedido;
+    if (p && ["recibido", "en_camino"].includes(p.estado)) {
+      p.ubicacion = c.ubicacion;
+      await avisarEquipo(`📍 #${p.codigo} ${c.nombre || ""} envió su ubicación (reenvíasela al domiciliario):\n${mapa(c.ubicacion)}`);
+      return responder(c, "¡Gracias! 📍 Ya le pasé tu ubicación al domiciliario 🛵");
+    }
+    if (c.carrito.length) {
+      if (c.estado === "esperando_confirmacion") return enviarResumen(c, "¡Gracias! 📍 Ubicación recibida.\n\n");
+      return siguientePaso(c, null, ["¡Gracias! 📍 Ubicación recibida."]);
+    }
+    return responder(c, "¡Gracias! 📍 Guardé tu ubicación para el domicilio. ¿Qué se te antoja hoy? 😊");
+  }
+
   if (entrada.carritoCatalogo) {
     const { carrito, quitados } = validarProductos(entrada.carritoCatalogo);
     if (carrito.length) {
@@ -1125,6 +1227,10 @@ async function procesarTurno(c, entrada) {
 
   // "No, así está bien" después de ofrecer bebida: seguir sin gastar modelo
   if (c.paso === "bebida" && c.estado === "armando" && c.carrito.length && esNegacion(texto)) return siguientePaso(c, null);
+  // "No tengo datos / no sé cómo" al pedir la ubicación: seguir sin ella
+  if (c.paso === "ubicacion" && c.estado === "armando" && c.carrito.length && (esNegacion(texto) || /no (tengo|puedo|se|me deja|hay)|sin datos|despues|ahorita no/.test(n))) {
+    return siguientePaso(c, null);
+  }
 
   // "menú", "qué tienen", "catálogo"... sin pedir nada más en el mismo mensaje
   if (PIDE_MENU.test(n) && n.split(" ").length <= 6 && !/\d/.test(n) && !buscarProducto(n)) return enviarMenu(c);
@@ -1191,7 +1297,10 @@ async function procesarTurno(c, entrada) {
   }
   if (r.entrega === "recoger" && !LOCAL) avisos.push("Por ahora solo hacemos domicilios 🛵");
   else if (r.entrega) c.entrega = r.entrega;
-  if (r.barrio) c.barrio = r.barrio;
+  if (r.barrio) {
+    if (norm(r.barrio) !== norm(c.barrio)) c.domicilioManual = null; // otro barrio: la tarifa especial ya no aplica
+    c.barrio = r.barrio;
+  }
   if (r.direccion) c.direccion = r.direccion;
   if (r.nombre) c.nombre = r.nombre;
   if (r.pago === "nequi" && !NEQUI) {
@@ -1240,7 +1349,7 @@ const AYUDA = `🤖 COMANDOS CRUJI
 /salio 7 → le avisa al cliente que va en camino
 /entregado 7 → cierra el pedido
 /cancelar 7 motivo → cancela y le avisa al cliente
-/aceptar 7 → sí llegan al barrio que pidió el #7
+/aceptar 7 4000 → sí llegan al barrio del #7, con ese valor de domicilio
 /agotado pastel · /hay pastel → productos agotados
 /demora 50 · /demora normal → tiempo de entrega
 /cerrar · /abrir → pausar o reanudar pedidos
@@ -1339,13 +1448,22 @@ async function comandoEquipo(a, texto) {
       return responderA(`❌ Pedido #${p.codigo} cancelado y el cliente ya sabe.`);
     }
     case "aceptar": {
-      const c = clientePorCodigo(arg);
-      if (!c) return responderA(`No encontré el #${arg}.`);
-      if (!c.barrio) return responderA(`El #${arg} no tiene barrio pendiente.`);
+      const [num, valorTxt] = arg.split(/\s+/);
+      const c = clientePorCodigo(num);
+      if (!c) return responderA(`No encontré el #${num}.`);
+      if (!c.barrio) return responderA(`El #${num} no tiene barrio pendiente.`);
+      const digitos = soloDigitos(valorTxt);
+      const valor = digitos ? Number(digitos) * (digitos.length <= 2 ? 1000 : 1) : null; // "4" o "4000" = $4.000
+      const sinValor = domicilioDe({ ...c, barrioAceptado: c.barrio, domicilioManual: null });
+      if (valor == null && sinValor.fuera) return responderA(`Está fuera de la tabla de distancias: escribe el valor del domicilio. Ej: /aceptar ${num} 6000`);
       c.barrioAceptado = c.barrio;
+      if (valor != null) c.domicilioManual = valor;
+      const aplicado = domicilioDe(c).valor || 0;
       liberarDeHumano(c);
       await siguientePaso(c, null);
-      return responderA(`✅ Aceptado ${c.barrio} para el #${arg}. El bot sigue con su pedido.`);
+      return responderA(
+        `✅ Aceptado ${c.barrio} para el #${num} con domicilio de ${aplicado ? pesos(aplicado) : "$0 (gratis)"}.${valor == null ? ` (Para otro valor: /aceptar ${num} 4000)` : ""} El bot sigue con su pedido.`
+      );
     }
     case "pedidos": {
       const activos = [];
@@ -1475,8 +1593,12 @@ async function recibir(m, nombrePerfil) {
       return acumular(c, m.button?.text || "");
     case "location": {
       const l = m.location || {};
+      if (l.latitude == null || l.longitude == null) return;
       c.ubicacion = { lat: l.latitude, lng: l.longitude };
-      return acumular(c, `[Envié mi ubicación${l.address ? ": " + l.address : l.name ? ": " + l.name : ""}]`);
+      const texto = `[Envié mi ubicación${l.address ? ` (${l.address})` : l.name ? ` (${l.name})` : ""}: ${mapa(c.ubicacion)}]`;
+      // Si venía escribiendo, se junta con sus mensajes; si no, se atiende de una
+      if (rafagas.has(num)) return acumular(c, texto);
+      return encolar(num, () => turnoSeguro(c, { ubicacion: true, texto }));
     }
     case "order": {
       // Carrito enviado desde un catálogo de WhatsApp (si algún día conectas uno con los mismos id de menu.js)
