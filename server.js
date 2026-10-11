@@ -257,6 +257,7 @@ function obtenerCliente(num, nombrePerfil) {
       preguntoPago: false,
       ofrecioBebida: false,
       pidioUbicacion: false,
+      menuEnviado: 0,
       estado: "armando", // armando | esperando_confirmacion | confirmado
       resumenEnviado: 0,
       recordoConfirmacion: false,
@@ -612,7 +613,7 @@ CAMPOS DEL JSON:
 - mostrar_menu: true si pide el menú, el catálogo, la carta, qué hay o precios.
 - frustrado: true si se nota molesto, repite lo mismo, dice que no le entiendes o usa groserías.
 - necesita_humano: true si pregunta algo que NO está en la información del negocio (ingredientes, alergias, facturas, pedidos para eventos, trabajo, proveedores, etc.).
-- respuesta: texto corto para el cliente (saludar, responder, aclarar).
+- respuesta: texto corto para el cliente (saludar, responder, aclarar). Si saluda o charla ("¿cómo estás?"), responde en UNA frase corta y cálida. En saludos, charla y preguntas generales NO termines preguntando qué quiere pedir: el sistema agrega esa pregunta y el menú.
 REGLAS DE LA RESPUESTA: nunca confirmes pedidos ni digas que va en camino; nunca digas precios ni totales (para precios usa mostrar_menu); nunca inventes datos. Cuando el pedido avanza, la respuesta puede ser muy corta: el sistema pregunta dirección y pago, y arma el resumen.`;
 }
 
@@ -720,6 +721,38 @@ const esAfirmacion = (t) => AFIRMACION.test(norm(t).replace(/[!¡.,;]+/g, "").tr
 const NEGACION =
   /^(no|nop|nel|no gracias|no gracias asi esta bien|asi esta bien|asi|listo|nada|nada mas|solo eso|eso es todo|eso seria todo|no por ahora|por ahora no|no senor|no senora|asi no mas|asi nomas|no asi esta bien)$/;
 const esNegacion = (t) => NEGACION.test(norm(t).replace(/[!¡.,;]+/g, "").trim());
+const PALABRA_SALUDO = "hola+|holi+|ola+|buenas+|buenos dias|buen dia|buenas tardes|buenas noches|hey+|que mas|q mas|quiubo|quibo|epa|saludos";
+const EXTRA_SALUDO =
+  "como (estas|esta|vas|va|amaneciste|le va|te va)|que tal|todo bien|vecino|vecina|amigo|amiga|senor|senora|joven|don|dona|muchachos|chicos|cruji";
+const SALUDO = new RegExp(`^(${PALABRA_SALUDO})( (${PALABRA_SALUDO}|${EXTRA_SALUDO}))*$`);
+const esSaludo = (t) => SALUDO.test(norm(t).replace(/[¿?¡!.,;👋😊🙂]+/gu, " ").replace(/\s+/g, " ").trim());
+const MENU_RECIENTE = 30 * MIN;
+
+function primerNombre(c) {
+  const p = String(c.nombre || "").trim().split(/\s+/)[0] || "";
+  return /^\p{L}{2,15}$/u.test(p) ? p.charAt(0).toUpperCase() + p.slice(1).toLowerCase() : "";
+}
+
+// Un saludo nunca se queda en "hola": lleva directo al pedido
+async function saludar(c) {
+  const nombre = primerNombre(c);
+  const hola = `¡Hola${nombre ? ", " + nombre : ""}! 👋`;
+  const p = c.pedido;
+  if (p && ["recibido", "en_camino"].includes(p.estado)) {
+    const estado = p.estado === "en_camino" ? "ya va en camino 🛵" : `está en cocina 👩‍🍳 (lleva ${minutosDesde(p.ts)} min)`;
+    return responder(c, `${hola} Tu pedido #${p.codigo} ${estado}. ¿Te ayudo con algo más?`);
+  }
+  if (c.estado === "esperando_confirmacion") return enviarResumen(c, `${hola} Tu pedido está listo para confirmar 👇\n\n`);
+  if (c.carrito.length) {
+    const sigo = `${hola} Seguimos con tu pedido: ${listaCarrito(c.carrito)} 😊`;
+    if (c.paso === "aclarar") return responder(c, `${sigo}\n${RECORDATORIO_PASO.aclarar}`);
+    return siguientePaso(c, null, [sigo]);
+  }
+  if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) {
+    return enviarMenu(c, `${hola} Te damos la bienvenida a CRUJI 🥟 Pasteles y empanadas recién hechos.`);
+  }
+  return responder(c, `${hola} ¿Qué se te antoja hoy? 😊 (Si quieres ver el menú otra vez, escribe *menú*)`);
+}
 
 const FLUJO = new Set(["aclarar", "opcion", "minimo", "bebida", "direccion", "ubicacion", "pago", "cambio"]);
 const RECORDATORIO_PASO = {
@@ -1233,6 +1266,9 @@ async function procesarTurno(c, entrada) {
     return siguientePaso(c, null);
   }
 
+  // Saludo puro ("hola", "buenas noches", "hola cómo estás"): directo a la acción, sin gastar modelo
+  if (esSaludo(texto)) return saludar(c);
+
   // "menú", "qué tienen", "catálogo"... sin pedir nada más en el mismo mensaje
   if (PIDE_MENU.test(n) && n.split(" ").length <= 6 && !/\d/.test(n) && !buscarProducto(n)) return enviarMenu(c);
 
@@ -1337,6 +1373,11 @@ async function procesarTurno(c, entrada) {
     let msg = unir(avisos, r.respuesta || "¿En qué te ayudo? 😊");
     if (c.estado === "esperando_confirmacion") msg += "\n\n(Tu pedido sigue esperando que lo confirmes 😊)";
     else if (enFlujo && RECORDATORIO_PASO[c.paso]) msg += `\n\n${RECORDATORIO_PASO[c.paso]}`;
+    else if (!c.carrito.length && !c.pedido) {
+      // Charla o pregunta sin pedido: responder corto y llevar a la acción
+      if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) return enviarMenu(c, msg);
+      msg += r.intencion === "pregunta" ? "\n\n¿Te anoto algo? 😊" : "\n\n¿Qué se te antoja hoy? 🥟";
+    }
     return responder(c, msg);
   }
   if (c.estado === "esperando_confirmacion" && !cambio && r.intencion === "confirmar") return confirmarPedido(c);
