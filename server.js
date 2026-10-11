@@ -114,9 +114,12 @@ Tu trabajo: leer toda la conversación y devolver el pedido ACUMULADO (lo que el
 - Si no queda claro qué producto quiere, pregunta.
 - NUNCA menciones precios ni totales en "respuesta"; eso lo calcula el sistema.
 - Si el cliente solo saluda o pregunta algo general, responde breve y pregunta qué desea pedir.
+- Si el cliente pregunta qué hay, qué tienes, el menú o los precios, pon "mostrar_menu": true y en "respuesta" escribe solo una frase corta de apertura; el sistema agrega la lista con precios.
+- Si pide algo que no vendemos (por ejemplo hamburguesas), dilo con amabilidad y ofrece lo que sí hay.
 
-Responde SOLO con JSON válido:
-{"productos":[{"id":"pastel_pollo","cantidad":2}],"barrio":"Ciudad Jardín o vacío","respuesta":"texto para el cliente"}`;
+Responde SOLO con un objeto JSON válido, sin texto adicional ni markdown, con esta forma exacta:
+{"productos":[{"id":"pastel_pollo","cantidad":2}],"barrio":"Ciudad Jardín o vacío","mostrar_menu":false,"respuesta":"texto para el cliente"}
+Si no hay productos aún, usa "productos": [].`;
 
 async function interpretar(numero) {
   const body = {
@@ -138,10 +141,29 @@ async function interpretar(numero) {
       });
       const contenido = r.data.choices[0].message.content || "";
       const limpio = contenido.replace(/```json|```/g, "").trim();
-      return JSON.parse(limpio);
+      const objeto = limpio.match(/\{[\s\S]*\}/);
+      return JSON.parse(objeto ? objeto[0] : limpio);
     } catch (e) {
       ultimoError = e;
       console.error(`Cerebro intento ${intento} fallo:`, JSON.stringify(e.response?.data || e.message));
+
+      // Si el modelo respondio bien pero sin formato JSON, aprovechamos esa respuesta
+      const generado = e.response?.data?.error?.failed_generation;
+      if (typeof generado === "string" && generado.trim()) {
+        const bloque = generado.match(/\{[\s\S]*\}/);
+        if (bloque) {
+          try {
+            return JSON.parse(bloque[0]);
+          } catch (_) {
+            /* no era JSON valido, seguimos abajo */
+          }
+        }
+        const texto = generado.replace(/["}\s]+$/, "").replace(/^["{\s]+/, "").trim();
+        if (texto) return { productos: [], barrio: "", mostrar_menu: false, respuesta: texto };
+      }
+
+      // En el segundo intento pedimos sin modo JSON estricto
+      if (intento === 1) delete body.response_format;
     }
   }
   throw ultimoError;
