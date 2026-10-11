@@ -5,7 +5,7 @@
  *  productos, precios, bebidas, salsas, barrios u horario.
  * ============================================================
  *
- * ⚠️ Los precios de BEBIDAS, AJÍ EXTRA y COMBO FAMILIAR son DE EJEMPLO.
+ * ⚠️ Los precios de BEBIDAS, AJÍ EXTRA, COMBO FAMILIAR y DOMICILIOS son DE EJEMPLO.
  *    Cámbialos por tus precios reales antes de vender.
  *
  * Cada producto tiene:
@@ -141,10 +141,29 @@ export const NEGOCIO = {
   // Quién atiende cuando el bot pasa la conversación a una persona (aparece en los mensajes al cliente)
   encargado: "Sergio",
 
-  // Barrios con domicilio. Si dejas la lista vacía [], el bot acepta cualquier barrio.
-  barrios: ["Ciudad Jardín", "La Paz", "Santa Clara", "El Recuerdo"],
+  // ---------- DOMICILIOS ----------
+  // Barrios a los que llegan y lo que cuesta el domicilio a cada uno (en pesos, sin puntos). ⚠️ valores de ejemplo
+  // Pon 0 si a ese barrio es gratis. Si un cliente pide para un barrio que no está aquí,
+  // el bot no lo rechaza: te consulta, y tú respondes por ejemplo /aceptar 7 4000
+  barrios: {
+    "Ciudad Jardín": 2000,
+    "La Paz": 2000,
+    "Santa Clara": 3000,
+    "El Recuerdo": 3000,
+  },
 
-  costoDomicilio: 0, // en pesos. 0 = no se cobra ni se menciona
+  // OPCIONAL: cobrar por distancia cuando el cliente manda su ubicación 📍 (es más justo que por barrio).
+  // 1. Abre Google Maps, mantén presionado tu local y copia los dos números que aparecen (ej: 2.4448, -76.6147)
+  // 2. Ponlos aquí así: ubicacionLocal: { lat: 2.4448, lng: -76.6147 },
+  // Si el cliente no manda ubicación, se usa la tarifa de su barrio. Más lejos que la tabla = te consulta.
+  ubicacionLocal: null,
+  tarifasPorDistancia: [
+    { hastaKm: 1, valor: 1500 }, // ⚠️ valores de ejemplo
+    { hastaKm: 2.5, valor: 2500 },
+    { hastaKm: 4, valor: 3500 },
+    { hastaKm: 6, valor: 5000 },
+  ],
+
   pedidoMinimo: 0, // mínimo para domicilio en pesos. 0 = sin mínimo
   tiempoEntrega: "30 a 40 minutos", // lo que se le promete al cliente (se cambia en vivo con /demora)
 
