@@ -1,5 +1,5 @@
 /**
- * BOT CRUJI v5 — Empanadas y Pasteles del Norte (Popayán)
+ * BOT DE PEDIDOS POR WHATSAPP v5.8 (Pedidito) — sirve para cualquier negocio de comida: todo lo del negocio va en menu.js
  * WhatsApp Cloud API (Meta) + Groq (Whisper para notas de voz + modelo que entiende pedidos)
  *
  * ARCHIVOS
@@ -34,6 +34,13 @@ const COCINA = soloDigitos(env.MI_NUMERO_COCINA);
 const EQUIPO = [...new Set([COCINA, ...String(env.ADMINS || "").split(",").map(soloDigitos)].filter(Boolean))];
 
 const ENCARGADO = String(NEGOCIO.encargado || "").trim();
+// Identidad del negocio (menu.js)
+const MARCA = String(NEGOCIO.marca || "nuestro negocio").trim();
+const EMOJI = String(NEGOCIO.emoji || "😋").trim();
+const LEMA = String(NEGOCIO.lema || "").trim();
+const DESCRIPCION_NEGOCIO = String(NEGOCIO.descripcion || "un negocio de comida a domicilio").trim();
+const EJEMPLO_PEDIDO = String(NEGOCIO.ejemploPedido || "").trim();
+const REGLAS_PRODUCTOS = String(NEGOCIO.reglasProductos || "").trim();
 const CON_QUIEN = ENCARGADO ? `con ${ENCARGADO}` : "con alguien del equipo";
 const A_QUIEN = ENCARGADO ? `a ${ENCARGADO}` : "al equipo";
 // Barrios: puede ser una lista ["La Paz", ...] o un objeto { "La Paz": 2000, ... } con la tarifa de cada uno
@@ -185,7 +192,7 @@ function textoTarifas() {
   return min === max ? (min ? pesos(min) : "gratis") : `desde ${pesos(min)} según el barrio`;
 }
 
-// Menú: lo principal (pasteles, empanadas, combos) con detalle; bebidas y salsas en una línea al final.
+// Menú: lo principal (productos y combos) con detalle; bebidas y salsas en una línea al final.
 // Los sabores no se listan aquí: el bot los pregunta cuando el cliente pide ese producto.
 const minuscula = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 const esCategoria = (cat, palabra) => norm(cat).includes(palabra);
@@ -221,7 +228,8 @@ function menuTexto() {
     principales.push(`*${cat}*\n${lineas.join("\n")}`);
   }
   if (SALSAS.incluidas?.length) {
-    alFinal.push(`🌶️ Incluye ${SALSAS.incluidas.map(minuscula).join(" o ")}${salsaExtra != null ? ` (porción extra ${pesos(salsaExtra)})` : ""}`);
+    const sal = SALSAS.incluidas.map(minuscula);
+    alFinal.push(`🌶️ Incluye ${sal.length <= 2 ? sal.join(" o ") : sal.slice(0, -1).join(", ") + " y " + sal.at(-1)}${salsaExtra != null ? ` (porción extra ${pesos(salsaExtra)})` : ""}`);
   }
   if (textoTarifas()) alFinal.push(`🛵 Domicilio: ${textoTarifas()}`);
   if (PEDIDO_MINIMO) alFinal.push(`Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}`);
@@ -412,7 +420,7 @@ function alertaToken(codigo) {
 }
 const enviarTexto = (to, texto) => enviar(to, { type: "text", text: { body: cortar(texto, 4000), preview_url: false } });
 
-async function enviarBotones(to, texto, botones) {
+async function enviarBotones(to, texto, botones, respaldo = "Responde *SÍ* para confirmar, o dime qué quieres cambiar.") {
   const r = await enviar(to, {
     type: "interactive",
     interactive: {
@@ -422,7 +430,7 @@ async function enviarBotones(to, texto, botones) {
     },
   });
   if (r.ok) return r;
-  return enviarTexto(to, `${texto}\n\nResponde *SÍ* para confirmar, o dime qué quieres cambiar.`);
+  return enviarTexto(to, `${texto}\n\n${respaldo}`);
 }
 const BOTONES_RESUMEN = [
   ["confirmar", "✅ Confirmar"],
@@ -448,8 +456,10 @@ async function marcarLeido(id) {
   }
 }
 
+// "Anotado: ..." solo si ese mismo listado no se acaba de decir en el mensaje (evita repetir el pedido dos veces)
+const eco = (pre, lista) => (pre.includes(lista) ? "" : `Anotado: ${lista} ✅\n`);
 const tituloCategoria = (cat, max) => cortar(String(cat).replace(/^[^\p{L}\p{N}]+/u, "").trim() || "Menú", max);
-const CONSEJO_TODO_JUNTO = "💡 También puedes escribirme todo junto, ej: *2 pasteles, 4 clásicas y una Coca-Cola*";
+const CONSEJO_TODO_JUNTO = EJEMPLO_PEDIDO ? `💡 También puedes escribirme todo junto, ej: *${EJEMPLO_PEDIDO}*` : "💡 También puedes escribirme todo tu pedido en un solo mensaje";
 
 // Lista de WhatsApp para elegir con un toque (máximo 10 productos)
 async function enviarLista(c, cuerpo, boton = "🛒 Elegir producto") {
@@ -486,7 +496,7 @@ async function enviarCatalogo(c, intro) {
     type: "interactive",
     interactive: {
       type: "product_list",
-      header: { type: "text", text: "Menú CRUJI 🥟" },
+      header: { type: "text", text: cortar(`Menú ${MARCA} ${EMOJI}`, 60) },
       body: { text: cortar(`${intro}\n\nAgrega al carrito todo lo que quieras 🛒 y me lo envías.`, 1024) },
       footer: { text: "O escríbeme tu pedido 😊" },
       action: { catalog_id: CATALOGO_WA, sections: [...secciones].slice(0, 10).map(([title, product_items]) => ({ title, product_items: product_items.slice(0, 30) })) },
@@ -514,12 +524,19 @@ async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
 
 // Después de elegir algo de la lista: "¿Algo más?" con la lista otra vez, hasta que diga "listo"
 async function preguntarAlgoMas(c, pre = "") {
-  const texto = `${pre}Anotado: ${listaCarrito(c.carrito)} ✅\n¿Algo más? Elige otro producto 👇 o escribe *listo* para seguir.`;
+  const texto = `${pre}${eco(pre, listaCarrito(c.carrito))}¿Algo más? 😊`;
   c.paso = "mas";
   c.pasoVeces = 0;
   recordar(c, "assistant", texto);
-  const r = await enviarLista(c, texto, "➕ Agregar algo");
-  return r.ok ? r : enviarTexto(c.num, texto);
+  return enviarBotones(
+    c.num,
+    texto,
+    [
+      ["mas_fin", "✅ Eso es todo"],
+      ["mas_agregar", "➕ Agregar algo"],
+    ],
+    "Escríbeme qué más quieres, o dime *no, gracias* y seguimos 😊"
+  );
 }
 
 // ---------- Avisos al equipo (con reintento si WhatsApp no los entrega) ----------
@@ -668,27 +685,27 @@ function infoNegocio() {
 function promptSistema() {
   const productos = Object.entries(PRODUCTOS)
     .map(([id, p]) => {
-      let linea = `- ${id}: ${p.nombre}`;
+      let linea = `- ${id}: ${p.nombre} (${pesos(p.precio)})`;
       if (p.opciones?.length) linea += ` | opciones: ${p.opciones.join(", ")}`;
       if (p.detalle) linea += ` | ${p.detalle}`;
       if (agotados.has(id)) linea += " | AGOTADO HOY: no lo ofrezcas";
       return linea;
     })
     .join("\n");
-  return `Eres el asistente de pedidos por WhatsApp de CRUJI, empanadas y pasteles del norte de Popayán.
+  return `Eres el asistente de pedidos por WhatsApp de ${MARCA}: ${DESCRIPCION_NEGOCIO}.
 Tu meta: que el cliente pida fácil y rápido y se sienta bien atendido.
 Tono: amiguero, cálido y cercano, colombiano neutro, sin jerga paisa. Frases cortas (máximo 2 líneas) y máximo 1 emoji.
-Los clientes escriben con errores, abreviaturas o por nota de voz mal transcrita: interpreta con sentido común ("pastelito" = pastel, "cuidad jardin" = Ciudad Jardín, "una coca" = gaseosa personal Coca-Cola).
+Los clientes escriben con errores, abreviaturas o por nota de voz mal transcrita: interpreta con sentido común (diminutivos como "una salchipapita" = una salchipapa; barrios mal escritos; "una coca" = una Coca-Cola).
 
 PRODUCTOS (usa SOLO estos id):
 ${productos}
 Reglas de productos:
-- Si dice "empanadas" sin decir de cuáles, no adivines: pregunta si clásicas o de sabor tradicional (pipián) y pon falta_aclarar = true.
-- Si no dice la cantidad, pregúntala (falta_aclarar = true).
+${REGLAS_PRODUCTOS ? REGLAS_PRODUCTOS + "\n" : ""}- Si no dice la cantidad, pregúntala (falta_aclarar = true).
 - Si el producto tiene opciones, pon la elegida en "nota" (ej: "Coca-Cola"). Varias opciones del mismo producto = una línea por opción (2 de Coca-Cola y 1 de manzana = dos líneas).
 - "nota" también sirve para indicaciones de ese producto (ej: "bien doraditas"). Si no hay, "".
-- NUNCA repitas un producto en la lista: cada producto (con su nota) va UNA sola vez con la cantidad TOTAL (si tenía 5 clásicas y no las cambia, siguen siendo 5).
+- NUNCA repitas un producto en la lista: cada producto (con su nota) va UNA sola vez con la cantidad TOTAL (si tenía 5 de un producto y no las cambia, siguen siendo 5).
 - Si pide algo que no vendemos, dilo con amabilidad y ofrece lo que hay.
+- En Colombia "una gaseosa de 2000" o "una de tres mil" habla del PRECIO, no del tamaño: ofrécele la opción más parecida diciendo su precio de la lista (ej: "¿Te sirve la gaseosa personal de $3.500?") y pon falta_aclarar = true.
 
 INFORMACIÓN DEL NEGOCIO (es lo único que sabes; no inventes nada más):
 ${infoNegocio()}
@@ -707,7 +724,7 @@ CAMPOS DEL JSON:
 - frustrado: true si se nota molesto, repite lo mismo, dice que no le entiendes o usa groserías.
 - necesita_humano: true si pregunta algo que NO está en la información del negocio (ingredientes, alergias, facturas, pedidos para eventos, trabajo, proveedores, etc.).
 - respuesta: texto corto para el cliente (saludar, responder, aclarar). Si saluda o charla ("¿cómo estás?"), responde en UNA frase corta y cálida. En saludos, charla y preguntas generales NO termines preguntando qué quiere pedir: el sistema agrega esa pregunta y el menú.
-REGLAS DE LA RESPUESTA: nunca confirmes pedidos ni digas que va en camino; nunca digas precios ni totales (para precios usa mostrar_menu); nunca inventes datos. Cuando el pedido avanza, la respuesta puede ser muy corta: el sistema pregunta dirección y pago, y arma el resumen.`;
+REGLAS DE LA RESPUESTA: nunca confirmes pedidos ni digas que va en camino; nunca digas totales ni sumes precios (eso lo hace el sistema); si mencionas el precio de UN producto, usa exactamente el de la lista; para mostrar todos los precios usa mostrar_menu; nunca inventes datos. Cuando el pedido avanza, la respuesta puede ser muy corta: el sistema pregunta dirección y pago, y arma el resumen.`;
 }
 
 function estadoParaModelo(c) {
@@ -811,9 +828,15 @@ const PIDE_MENU = /(\bmenu\b|\bcatalogo\b|\bcarta\b|que (tienen|tienes|venden|ve
 const AFIRMACION =
   /^(si+|s|dale|listo|ok|okay|okey|oki|confirmo|confirmar|confirmado|de una|perfecto|correcto|asi es|eso|claro|va|vale|hagale|👍|✅|👌)( (por favor|porfa|gracias|senor|senora|confirmo|de una|dale))?$/;
 const esAfirmacion = (t) => AFIRMACION.test(norm(t).replace(/[!¡.,;]+/g, "").trim());
-const NEGACION =
-  /^(no|nop|nel|no gracias|no gracias asi esta bien|asi esta bien|asi|listo|nada|nada mas|solo eso|eso es todo|eso seria todo|no por ahora|por ahora no|no senor|no senora|asi no mas|asi nomas|no asi esta bien)$/;
-const esNegacion = (t) => NEGACION.test(norm(t).replace(/[!¡.,;]+/g, "").trim());
+// "No, gracias / así está bien / eso es todo / ya con eso"... en todas sus formas
+const FRASE_FIN =
+  "no|nop|nel|nones|listo|ya|ya esta|ya con eso|con eso|con eso esta bien|eso|eso es todo|eso seria todo|eso no mas|eso nomas|es todo|seria todo|nada|nada mas|solo eso|asi|asi esta bien|asi esta|asi no mas|asi nomas|asi estoy bien|por ahora no|no por ahora|no mas|no quiero mas|nada por ahora|seguir|sigamos|continuar|terminar|de resto nada|lo demas esta bien";
+const FIN = new RegExp(`^(${FRASE_FIN})( (${FRASE_FIN}))*$`);
+const RELLENO = /\b(gracias|muchas|muy|amable|por favor|porfa|senor|senora|senorita|amigo|amiga|mijo|mija|vecino|vecina|joven|de verdad|la verdad|pues|entonces)\b/g;
+const esNegacion = (t) => {
+  const limpio = norm(t).replace(/[¿?¡!.,;👍🙏😊🙂]+/gu, " ").replace(RELLENO, " ").replace(/\s+/g, " ").trim();
+  return limpio === "" ? /gracias/.test(norm(t)) : FIN.test(limpio);
+};
 const PALABRA_SALUDO = "hola+|holi+|ola+|buenas+|buenos dias|buen dia|buenas tardes|buenas noches|hey+|que mas|q mas|quiubo|quibo|epa|saludos";
 const EXTRA_SALUDO =
   "como (estas|esta|vas|va|amaneciste|le va|te va)|que tal|todo bien|vecino|vecina|amigo|amiga|senor|senora|joven|don|dona|muchachos|chicos|cruji";
@@ -842,15 +865,14 @@ async function saludar(c) {
     return siguientePaso(c, null, [sigo]);
   }
   if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) {
-    return enviarMenu(c, `${hola} Te damos la bienvenida a CRUJI 🥟 Pasteles y empanadas recién hechos.`);
+    return enviarMenu(c, `${hola} Te damos la bienvenida a ${MARCA} ${EMOJI}${LEMA ? " " + LEMA : ""}`);
   }
   return responder(c, `${hola} ¿Qué se te antoja hoy? 😊 (Si quieres ver el menú otra vez, escribe *menú*)`);
 }
 
 const FLUJO = new Set(["aclarar", "opcion", "mas", "minimo", "bebida", "direccion", "ubicacion", "pago", "cambio"]);
-const LISTO = /^(listo|ya|ya esta|eso|eso es todo|eso seria todo|nada mas|nada|seguir|sigamos|continuar|no|no gracias|no mas|asi esta bien|solo eso|terminar|termine)$/;
 const RECORDATORIO_PASO = {
-  mas: "¿Algo más? Elige del menú o escribe *listo* para seguir 😊",
+  mas: "¿Algo más? Si ya está, dime *no, gracias* y seguimos 😊",
   direccion: "Cuando puedas, me pasas la dirección 🏠",
   ubicacion: "Si puedes, me mandas tu ubicación 📍 (si no, dime y seguimos)",
   pago: "Y me cuentas cómo vas a pagar 💵",
@@ -946,7 +968,7 @@ async function siguientePaso(c, r, avisos = []) {
           return n.charAt(0).toLowerCase() + n.slice(1);
         })
         .join(", ");
-      return pregunta(c, "bebida", `${pre}Anotado: ${lista} ✅\n¿Le agregamos algo de tomar? 🥤 Tenemos ${nombres}.`);
+      return pregunta(c, "bebida", `${pre}${eco(pre, lista)}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombres}.`);
     }
   }
 
@@ -954,7 +976,7 @@ async function siguientePaso(c, r, avisos = []) {
     if (!c.barrio) {
       const llegamos = BARRIOS.length ? `\n(Llegamos a ${BARRIOS.join(", ")})` : "";
       if (c.ubicacion) return pregunta(c, "direccion", `${pre}¿Y en qué barrio es? 🏠${llegamos}`);
-      return pregunta(c, "direccion", `${pre}Anotado: ${lista} ✅\n¿A dónde te lo llevamos? Dime el barrio, la dirección y una referencia 🏠${llegamos}`);
+      return pregunta(c, "direccion", `${pre}${eco(pre, lista)}¿A dónde te lo llevamos? Dime el barrio, la dirección y una referencia 🏠${llegamos}`);
     }
     const cubierto = barrioCubierto(c);
     if (!cubierto) return barrioNoCubierto(c);
@@ -1004,7 +1026,7 @@ async function enviarResumen(c, pre = "") {
   txt += `\n*Total: ${pesos(total)}*`;
   txt += `\n${textoEntrega(c)}`;
   txt += `\n${textoPago(c, total)}`;
-  if (SALSAS.porDefecto || c.salsas) txt += `\n🌶️ Salsa: ${c.salsas || SALSAS.porDefecto} (incluida)`;
+  if (SALSAS.porDefecto || c.salsas) txt += `\n🌶️ Salsas: ${c.salsas || SALSAS.porDefecto} (incluidas)`;
   if (c.notas) txt += `\n📝 ${c.notas}`;
   if (!esCambio) txt += `\n⏱️ ${c.entrega === "recoger" ? "Listo en" : "Llega en"} ${tiempoEntrega} aprox.`;
   txt += `\n\n¿Lo confirmo?`;
@@ -1022,7 +1044,7 @@ const telLocal = (num) => (num.startsWith("57") && num.length === 12 ? `${num.sl
 
 // Tarjeta lista para reenviar al domiciliario
 function textoDomiciliario(p, c, actualizado = false) {
-  let t = `🛵 DOMICILIO #${p.codigo}${actualizado ? " (ACTUALIZADO)" : ""} — CRUJI\n`;
+  let t = `🛵 DOMICILIO #${p.codigo}${actualizado ? " (ACTUALIZADO)" : ""} — ${MARCA}\n`;
   t += `👤 ${c.nombre || "Cliente"} — ${telLocal(c.num)}\n💬 wa.me/${c.num}\n`;
   t += `📍 ${p.barrio}${p.direccion ? " — " + p.direccion : ""}\n`;
   t += p.ubicacion ? `🗺️ ${mapa(p.ubicacion)}\n` : "🗺️ Sin ubicación GPS: si no encuentras, llama al cliente\n";
@@ -1037,7 +1059,7 @@ function textoDomiciliario(p, c, actualizado = false) {
 }
 
 function textoCocina(p, anterior, c) {
-  const enc = anterior ? `✏️ CAMBIO EN PEDIDO #${p.codigo}` : `🔔 PEDIDO #${p.codigo} — CRUJI`;
+  const enc = anterior ? `✏️ CAMBIO EN PEDIDO #${p.codigo}` : `🔔 PEDIDO #${p.codigo} — ${MARCA}`;
   let t = `${enc}\n👤 ${c.nombre || "Cliente"} — wa.me/${c.num}\n`;
   t += p.entrega === "recoger" ? "🏪 RECOGE EN EL LOCAL\n" : `📍 ${p.barrio}${p.direccion ? " — " + p.direccion : ""}\n`;
   if (p.ubicacion) t += `🗺️ ${mapa(p.ubicacion)}\n`;
@@ -1371,9 +1393,19 @@ async function procesarTurno(c, entrada) {
     if (c.carrito.length) return siguientePaso(c, null);
   }
 
-  // "Listo" después de "¿Algo más?": seguir con el pedido sin gastar modelo
-  if (c.paso === "mas" && c.estado === "armando" && c.carrito.length && LISTO.test(norm(texto).replace(/[!¡.,;]+/g, "").trim())) {
+  // "¿Algo más?": botones o "no, gracias / eso es todo" siguen con el pedido sin gastar modelo
+  if (entrada.boton === "mas_agregar") {
+    c.paso = "mas";
+    const r = await enviarLista(c, "Elige lo que quieras agregar 👇 (o escríbemelo)", "➕ Agregar algo");
+    return r.ok ? r : enviarMenu(c, "Esto es lo que tenemos 😋");
+  }
+  if ((entrada.boton === "mas_fin" || (c.paso === "mas" && esNegacion(texto))) && c.estado === "armando" && c.carrito.length) {
     return siguientePaso(c, null);
+  }
+  if (entrada.boton === "mas_fin") {
+    // Botón viejo: si ya hay resumen pendiente, se lo mostramos otra vez; si ya confirmó, se lo recordamos
+    if (c.estado === "esperando_confirmacion") return enviarResumen(c);
+    if (c.pedido) return responder(c, `Tu pedido #${c.pedido.codigo} ya está confirmado 😊`);
   }
   // "No, así está bien" después de ofrecer bebida: seguir sin gastar modelo
   if (c.paso === "bebida" && c.estado === "armando" && c.carrito.length && esNegacion(texto)) return siguientePaso(c, null);
@@ -1488,11 +1520,11 @@ async function procesarTurno(c, entrada) {
   if (!hablaDelPedido) {
     let msg = unir(avisos, r.respuesta || "¿En qué te ayudo? 😊");
     if (c.estado === "esperando_confirmacion") msg += "\n\n(Tu pedido sigue esperando que lo confirmes 😊)";
-    else if (enFlujo && RECORDATORIO_PASO[c.paso]) msg += `\n\n${RECORDATORIO_PASO[c.paso]}`;
+    else if (enFlujo && RECORDATORIO_PASO[c.paso] && !r.falta_aclarar && !/\?\s*$/.test(r.respuesta)) msg += `\n\n${RECORDATORIO_PASO[c.paso]}`; // una sola pregunta a la vez
     else if (!c.carrito.length && !c.pedido) {
       // Charla o pregunta sin pedido: responder corto y llevar a la acción
       if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) return enviarMenu(c, msg);
-      msg += r.intencion === "pregunta" ? "\n\n¿Te anoto algo? 😊" : "\n\n¿Qué se te antoja hoy? 🥟";
+      msg += r.intencion === "pregunta" ? "\n\n¿Te anoto algo? 😊" : `\n\n¿Qué se te antoja hoy? ${EMOJI}`;
     }
     return responder(c, msg);
   }
@@ -1501,14 +1533,14 @@ async function procesarTurno(c, entrada) {
 }
 
 // ======================= COMANDOS DEL EQUIPO =======================
-const AYUDA = `🤖 COMANDOS CRUJI
+const AYUDA = () => `🤖 COMANDOS ${MARCA.toUpperCase()}
 #7 texto → le escribes al cliente #7 (el bot se pausa con él)
 #7 bot → el bot vuelve a atender al #7
 /salio 7 → le avisa al cliente que va en camino
 /entregado 7 → cierra el pedido
 /cancelar 7 motivo → cancela y le avisa al cliente
 /aceptar 7 4000 → sí llegan al barrio del #7, con ese valor de domicilio
-/agotado pastel · /hay pastel → productos agotados
+/agotado ${PRODUCTOS[IDS[0]]?.corto || "producto"} · /hay ${PRODUCTOS[IDS[0]]?.corto || "producto"} → productos agotados
 /demora 50 · /demora normal → tiempo de entrega
 /cerrar · /abrir → pausar o reanudar pedidos
 /pedidos → pedidos y clientes pendientes
@@ -1554,7 +1586,7 @@ async function comandoEquipo(a, texto) {
   switch (cmd) {
     case "ayuda":
     case "comandos":
-      return responderA(AYUDA);
+      return responderA(AYUDA());
     case "abrir":
       cerradoManual = false;
       return responderA(`✅ Abierto: el bot está tomando pedidos.${dentroDeHorario() ? "" : "\n(Ojo: estás fuera del horario de menu.js, así que el bot seguirá diciendo que está cerrado.)"}`);
@@ -1592,7 +1624,7 @@ async function comandoEquipo(a, texto) {
       if (!p) return responderA(`No encontré el pedido #${arg}.`);
       p.estado = "entregado";
       p.actualizado = ahora();
-      await enviarTexto(c.num, "¡Gracias por pedir en CRUJI! 💛 Que lo disfrutes. Cualquier cosa, aquí estamos.");
+      await enviarTexto(c.num, `¡Gracias por pedir en ${MARCA}! 💛 Que lo disfrutes. Cualquier cosa, aquí estamos.`);
       return responderA(`✅ Pedido #${p.codigo} entregado.`);
     }
     case "cancelar": {
@@ -1821,7 +1853,7 @@ app.use(
   })
 );
 
-app.get("/", (_req, res) => res.send("CRUJI bot activo"));
+app.get("/", (_req, res) => res.send(`${MARCA}: bot activo`));
 
 app.get("/webhook", (req, res) => {
   if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === VERIFY_TOKEN) {
@@ -1857,7 +1889,7 @@ app.post("/webhook", (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`CRUJI bot corriendo en puerto ${PORT}`);
+  console.log(`Bot de ${MARCA} corriendo en puerto ${PORT}`);
   console.log(
     `Equipo: ${EQUIPO.length} celular(es) | Modelo: ${GROQ_MODEL} | Barrios: ${BARRIOS.join(", ") || "todos"} | Horario: ${
       ABRE != null && CIERRA != null ? `${fmtHora(ABRE)} a ${fmtHora(CIERRA)}` : "siempre abierto"
