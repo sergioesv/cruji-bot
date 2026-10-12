@@ -1,81 +1,52 @@
 /**
  * ============================================================
- *  MENÚ Y DATOS DEL NEGOCIO — CRUJI
+ *  MENÚ Y DATOS DEL NEGOCIO — SALCHIPAPAS
  *  Este es el ÚNICO archivo que necesitas editar para cambiar
- *  productos, precios, bebidas, salsas, barrios u horario.
+ *  productos, precios, salsas, bebidas, barrios u horario.
  * ============================================================
- *
- * ⚠️ Los precios de BEBIDAS, AJÍ EXTRA, COMBO FAMILIAR y DOMICILIOS son DE EJEMPLO.
- *    Cámbialos por tus precios reales antes de vender.
  *
  * Cada producto tiene:
  *   nombre      como lo ve el cliente
  *   corto       nombre corto para la lista de WhatsApp (máximo 24 letras)
- *   precio      en pesos, sin puntos (5500, no 5.500)
+ *   precio      en pesos, sin puntos (8000, no 8.000)
  *   categoria   para agrupar el menú (las bebidas deben tener "Bebidas" en la categoría)
  *   alias       otras formas en que la gente lo pide (en minúscula y sin tildes)
+ *   descripcion (opcional) lo que trae, en pocas palabras; sale en el menú y en la lista
  *   opciones    (opcional) sabores o variantes; si el cliente no dice cuál, el bot pregunta
- *   descripcion (opcional) lo que trae, en pocas palabras; sale en el menú y en la lista (ej: "2 pasteles + 4 clásicas")
- *   detalle     (opcional) aclaración que el bot puede usar al responder
- *   incluyeBebida (opcional) true si ya trae bebida (así el bot no ofrece bebida aparte)
  *   enLista     true si aparece en la lista para elegir con un toque (máximo 10 en total)
  *
- * Cómo se ve el menú: las categorías principales (pasteles, combos) salen con detalle y en el orden de
- * este archivo. Las categorías que dicen "Bebidas" o "Salsas" se resumen en una línea al final.
- *
- * Para quitar un producto, borra su bloque completo.
+ * Para agregar un producto, copia un bloque completo, cambia el id (lo que va antes de los
+ * dos puntos, sin espacios ni tildes) y sus datos. El id no se debe repetir.
  * Para agotar algo solo por hoy, NO lo borres: usa /agotado desde el celular de cocina.
- * El "id" (lo que va antes de los dos puntos, ej: pastel_pollo) no se debe repetir.
  */
 
 export const PRODUCTOS = {
-  // ---------- PASTELES Y EMPANADAS ----------
-  pastel_pollo: {
-    nombre: "Pastel de pollo",
-    corto: "Pastel de pollo",
-    precio: 5500,
-    categoria: "🥟 Pasteles y empanadas",
-    alias: ["pastel", "pasteles", "pastelito", "pastelitos"],
+  // ---------- SALCHIPAPAS ----------
+  salchipapa_sencilla: {
+    nombre: "Salchipapa sencilla",
+    corto: "Salchipapa sencilla",
+    precio: 8000,
+    categoria: "🍟 Salchipapas",
+    descripcion: "", // ej: "Papa a la francesa + salchicha + salsas"
+    alias: ["sencilla", "sencillas", "normal", "salchipapa sencilla", "salchipapa normal"],
     enLista: true,
   },
-  empanada_clasica: {
-    nombre: "Empanada clásica",
-    corto: "Empanada clásica",
-    precio: 3000,
-    categoria: "🥟 Pasteles y empanadas",
-    alias: ["clasica", "clasicas", "empanada clasica", "empanadas clasicas"],
+  salchipapa_lomo: {
+    nombre: "Salchipapa de lomo",
+    corto: "Salchipapa de lomo",
+    precio: 12000,
+    categoria: "🍟 Salchipapas",
+    descripcion: "", // ej: "Papa + salchicha + lomo en trocitos"
+    alias: ["lomo", "de lomo", "con lomo", "salchipapa de lomo", "salchipapa con lomo"],
     enLista: true,
   },
-  sabor_tradicional: {
-    nombre: "Empanada sabor tradicional",
-    corto: "Empanada tradicional",
-    precio: 2800,
-    categoria: "🥟 Pasteles y empanadas",
-    alias: ["tradicional", "tradicionales", "pipian", "de pipian"],
-    descripcion: "De pipián",
-    detalle: "Es la empanada de pipián.",
-    enLista: true,
-  },
-
-  // ---------- COMBOS ----------
-  combo_norte: {
-    nombre: "Combo Norte (2 pasteles + 4 clásicas)",
-    corto: "Combo Norte",
-    descripcion: "2 pasteles + 4 empanadas clásicas",
-    precio: 24000,
-    categoria: "🎁 Combos",
-    alias: ["combo norte", "combo"],
-    enLista: true,
-  },
-  combo_familiar: {
-    nombre: "Combo Familiar (6 pasteles + gaseosa 1.5 L)",
-    corto: "Combo Familiar",
-    descripcion: "6 pasteles + gaseosa 1.5 L",
-    precio: 38000, // ⚠️ precio de ejemplo
-    categoria: "🎁 Combos",
-    alias: ["combo familiar", "familiar"],
-    opciones: ["Coca-Cola", "Postobón manzana", "Colombiana"],
-    incluyeBebida: true,
+  salchipapa_chorizo: {
+    nombre: "Salchipapa de chorizo",
+    corto: "Salchipapa de chorizo",
+    precio: 12000,
+    categoria: "🍟 Salchipapas",
+    descripcion: "", // ej: "Papa + salchicha + chorizo"
+    alias: ["chorizo", "de chorizo", "con chorizo", "salchipapa de chorizo", "salchipapa con chorizo"],
     enLista: true,
   },
 
@@ -125,44 +96,36 @@ export const PRODUCTOS = {
     opciones: ["Durazno", "Limón"],
     enLista: true,
   },
-
-  // ---------- SALSAS EXTRA (⚠️ precio de ejemplo) ----------
-  aji_extra: {
-    nombre: "Porción extra de ají",
-    corto: "Ají extra",
-    precio: 1000,
-    categoria: "🌶️ Salsas extra",
-    alias: ["aji extra", "mas aji", "porcion de aji", "porcion extra"],
-    opciones: ["Ají de maní", "Ají picante"],
-    enLista: false,
-  },
 };
 
-// Salsas que van GRATIS con el pedido. El cliente puede elegir; si no dice nada, va "porDefecto".
+// Salsas que van GRATIS. ⚠️ Ajusta a las que de verdad das.
+// Si dejas porDefecto vacío "", el resumen no menciona salsas a menos que el cliente las pida.
 export const SALSAS = {
-  incluidas: ["Ají de maní", "Ají picante"],
-  porDefecto: "Ají de maní",
+  incluidas: ["Salsa rosada", "Salsa de piña", "Mayonesa", "Salsa de tomate"],
+  porDefecto: "Todas las salsas de la casa",
 };
 
 export const NEGOCIO = {
+  // ---------- IDENTIDAD (cómo se presenta el bot) ----------
+  marca: "Pedidito", // nombre del negocio que dice el bot. Cámbialo por la marca de las salchipapas si tienen una.
+  emoji: "🍟",
+  lema: "Salchipapas recién hechas, a domicilio.",
+  descripcion: "salchipapas a domicilio", // cómo se describe el negocio ante la IA
+  ejemploPedido: "2 salchipapas de lomo y 1 sencilla", // ejemplo que sale en el menú
+  reglasProductos: `- Si dice "salchipapa" o "salchipapas" sin decir cuál, no adivines: pregunta si la quiere sencilla, de lomo o de chorizo, y pon falta_aclarar = true.
+- "salchi" o "salchipapita" = salchipapa.`,
+
   // Quién atiende cuando el bot pasa la conversación a una persona (aparece en los mensajes al cliente)
   encargado: "Sergio",
 
   // ---------- DOMICILIOS ----------
-  // Barrios a los que llegan y lo que cuesta el domicilio a cada uno (en pesos, sin puntos). ⚠️ valores de ejemplo
-  // Pon 0 si a ese barrio es gratis. Si un cliente pide para un barrio que no está aquí,
-  // el bot no lo rechaza: te consulta, y tú respondes por ejemplo /aceptar 7 4000
-  barrios: {
-    "Ciudad Jardín": 2000,
-    "La Paz": 2000,
-    "Santa Clara": 3000,
-    "El Recuerdo": 3000,
-  },
+  // ⚠️ Pon los barrios a los que llegan y lo que cuesta el domicilio a cada uno (en pesos, sin puntos). Ejemplo:
+  //   barrios: { "La Paz": 2000, "Ciudad Jardín": 3000 },
+  // Si dejas {} vacío, el bot acepta cualquier barrio y no cobra domicilio.
+  barrios: {},
 
-  // OPCIONAL: cobrar por distancia cuando el cliente manda su ubicación 📍 (es más justo que por barrio).
-  // 1. Abre Google Maps, mantén presionado tu local y copia los dos números que aparecen (ej: 2.4448, -76.6147)
-  // 2. Ponlos aquí así: ubicacionLocal: { lat: 2.4448, lng: -76.6147 },
-  // Si el cliente no manda ubicación, se usa la tarifa de su barrio. Más lejos que la tabla = te consulta.
+  // OPCIONAL: cobrar por distancia cuando el cliente manda su ubicación 📍.
+  // Pon la ubicación de la cocina así: ubicacionLocal: { lat: 2.4448, lng: -76.6147 },
   ubicacionLocal: null,
   tarifasPorDistancia: [
     { hastaKm: 1, valor: 1500 }, // ⚠️ valores de ejemplo
@@ -170,37 +133,28 @@ export const NEGOCIO = {
     { hastaKm: 4, valor: 3500 },
     { hastaKm: 6, valor: 5000 },
   ],
+  costoDomicilio: 0, // tarifa general si el barrio no tiene una propia. 0 = no se cobra ni se menciona
 
   pedidoMinimo: 0, // mínimo para domicilio en pesos. 0 = sin mínimo
   tiempoEntrega: "30 a 40 minutos", // lo que se le promete al cliente (se cambia en vivo con /demora)
 
-  // Horario en hora de Colombia (formato 24 h: "11", "11:30", "21"). Vacíos "" = siempre abierto.
+  // Horario en hora de Colombia (formato 24 h: "17", "17:30", "23"). Vacíos "" = siempre abierto.
   horaAbre: "",
   horaCierra: "",
 
   nequi: "", // número de Nequi; vacío = solo efectivo
-  telefono: "", // número para llamar si hay una urgencia (se da al cliente si nadie responde)
-  direccionLocal: "", // si el cliente puede recoger en el local, pon la dirección; vacío = solo domicilio
+  telefono: "", // número para llamar si hay una urgencia
+  direccionLocal: "", // si se puede recoger en el local, pon la dirección; vacío = solo domicilio
 
-  // Foto del menú (opcional): un enlace público a una imagen JPG o PNG.
-  // Puedes subirla a Supabase Storage (bucket público) y pegar aquí el enlace.
-  imagenMenu: "",
-
-  // Catálogo de WhatsApp (opcional, lo más bonito): el cliente ve fotos, agrega varias cosas a un carrito y lo envía.
-  // 1. Crea el catálogo en Commerce Manager (business.facebook.com/commerce) y agrega cada producto con foto y precio.
-  // 2. En cada producto, el "ID de contenido" (o SKU) debe ser EXACTAMENTE el id de arriba (ej: pastel_pollo).
-  // 3. Conecta el catálogo a tu cuenta de WhatsApp (WhatsApp Manager → Catálogo).
-  // 4. Pega aquí el número del catálogo. Si lo dejas vacío, el bot usa la lista normal.
-  catalogoWhatsApp: "",
+  imagenMenu: "", // enlace público a una foto del menú (opcional)
+  catalogoWhatsApp: "", // ID del catálogo de Meta (opcional)
 
   // Respuestas a preguntas frecuentes. El bot SOLO responde lo que esté aquí;
   // lo que no sepa se lo pasa a una persona. Escribe frases cortas.
-  informacion: `
-Los pasteles y empanadas son fritos y se entregan calientes.
-`.trim(),
+  informacion: ``,
 
   // Tiempos (en minutos)
-  minutosParaCambios: 10, // tiempo en que el cliente puede cambiar o cancelar solo, sin pasar por una persona
-  minutosEsperaPersona: 5, // cada cuánto se insiste si la persona no ha respondido
-  minutosAlertaPedido: 45, // si un pedido no ha salido en este tiempo, se avisa a cocina
+  minutosParaCambios: 10,
+  minutosEsperaPersona: 5,
+  minutosAlertaPedido: 45,
 };
