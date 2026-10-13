@@ -462,7 +462,7 @@ async function enviarBotones(to, texto, botones, respaldo = "Responde *SÍ* para
     },
   });
   if (r.ok) return r;
-  return enviarTexto(to, `${texto}\n\n${respaldo}`);
+  return enviarTexto(to, respaldo ? `${texto}\n\n${respaldo}` : texto);
 }
 const BOTONES_RESUMEN = [
   ["confirmar", "✅ Confirmar"],
@@ -635,26 +635,34 @@ async function preguntarAlgoMas(c, pre = "") {
 const avisosEnviados = new Map(); // id del mensaje -> { a, texto }
 const pendientesEquipo = [];
 
-async function avisarA(a, texto) {
-  const r = await enviarTexto(a, texto);
+async function avisarA(a, texto, botones = null) {
+  let r;
+  if (botones?.length) {
+    // Con botones para cocina (máximo 3). Si el texto es muy largo, va el texto y luego los botones
+    if (Array.from(texto).length <= 1000) r = await enviarBotones(a, texto, botones, "");
+    else {
+      r = await enviarTexto(a, texto);
+      if (r.ok) await enviarBotones(a, "👆 ¿Qué hacemos?", botones, "");
+    }
+  } else r = await enviarTexto(a, texto);
   if (r.ok) {
     if (r.id) {
-      avisosEnviados.set(r.id, { a, texto });
+      avisosEnviados.set(r.id, { a, texto, botones });
       if (avisosEnviados.size > 500) avisosEnviados.delete(avisosEnviados.keys().next().value);
     }
     return true;
   }
-  pendientesEquipo.push({ a, texto });
+  pendientesEquipo.push({ a, texto, botones });
   console.error(`⚠️ El aviso a ${a} no salió. Ese celular debe escribirle algo al bot (ej: /ayuda) para volver a recibir avisos.`);
   return false;
 }
-async function avisarEquipo(texto, destinos = EQUIPO) {
+async function avisarEquipo(texto, destinos = EQUIPO, botones = null) {
   if (!destinos.length) {
     console.warn("⚠️ Falta MI_NUMERO_COCINA: nadie está recibiendo los avisos.");
     return false;
   }
   let alguno = false;
-  for (const a of destinos) alguno = (await avisarA(a, texto)) || alguno;
+  for (const a of destinos) alguno = (await avisarA(a, texto, botones)) || alguno;
   return alguno;
 }
 function manejarEstadoEntrega(st) {
@@ -672,7 +680,7 @@ async function reenviarPendientes(a) {
   if (!mios.length) return;
   for (let i = pendientesEquipo.length - 1; i >= 0; i--) if (pendientesEquipo[i].a === a) pendientesEquipo.splice(i, 1);
   await enviarTexto(a, `📥 Tenías ${mios.length} aviso(s) que no te habían llegado:`);
-  for (const p of mios) await avisarA(a, p.texto);
+  for (const p of mios) await avisarA(a, p.texto, p.botones);
 }
 
 // ---------- Audio y archivos ----------
@@ -1224,6 +1232,18 @@ async function enviarResumen(c, pre = "") {
 }
 
 const mapa = (u) => `https://maps.google.com/?q=${u.lat},${u.lng}`;
+
+// Botones para cocina según cómo va el pedido (en vez de escribir /salio 7, /pagook 7...)
+function botonesPedido(p) {
+  if (!p) return [];
+  const b = [];
+  if (p.pago === "nequi" && !p.pagoVerificado && ["recibido", "en_camino"].includes(p.estado)) {
+    b.push([`cmd:pagook:${p.codigo}`, "💜 Pago OK"], [`cmd:pagomal:${p.codigo}`, "❌ Pago no llegó"]);
+  }
+  if (p.estado === "recibido") b.push([`cmd:salio:${p.codigo}`, "🛵 Salió"]);
+  else if (p.estado === "en_camino") b.push([`cmd:entregado:${p.codigo}`, "✅ Entregado"]);
+  return b.slice(0, 3);
+}
 const enlaceCliente = (c) =>
   esTelefono(c.num)
     ? `wa.me/${c.num}`
@@ -1242,7 +1262,7 @@ function textoDomiciliario(p, c, actualizado = false) {
     : `👤 ${c.nombre || "Cliente"} — sin teléfono (no lo quiso dar; si hace falta, escríbele tú con #${c.pedido?.codigo || c.codigo} texto)\n`;
   t += `📍 ${p.barrio}${p.direccion ? " — " + p.direccion : ""}\n`;
   t += p.ubicacion ? `🗺️ ${mapa(p.ubicacion)}\n` : "🗺️ Sin ubicación GPS: si no encuentras, llama al cliente\n";
-  if (p.pago === "nequi") t += `💜 Pago por Nequi (${pesos(p.total)}): confirma con cocina antes de entregar\n`;
+  if (p.pago === "nequi") t += `💜 Pago por Nequi (${pesos(p.total)}): NO cobrar. Sal solo cuando cocina confirme el pago\n`;
   else {
     t += `💵 Cobrar: ${pesos(p.total)}`;
     if (p.pagaCon > p.total) t += ` (paga con ${pesos(p.pagaCon)} → cambio ${pesos(p.pagaCon - p.total)})`;
@@ -1262,7 +1282,7 @@ function textoCocina(p, anterior, c) {
   if (p.notas) t += `📝 ${p.notas}\n`;
   t += p.domicilio ? `Subtotal ${pesos(p.subtotal)} + domicilio ${pesos(p.domicilio)}\n` : "";
   t += `TOTAL: ${pesos(p.total)}\n`;
-  if (p.pago === "nequi") t += "💜 NEQUI — ⚠️ verifica el pago antes de despachar\n";
+  if (p.pago === "nequi") t += `💜 NEQUI — ⚠️ cocina ya, pero NO despaches hasta ver la plata en tu Nequi (/pagook ${p.codigo})\n`;
   else if (p.pagaCon === 0 || p.pagaCon === p.total) t += "💵 Efectivo — pago exacto\n";
   else if (p.pagaCon > p.total) t += `💵 Efectivo — paga con ${pesos(p.pagaCon)} → llevar cambio de ${pesos(p.pagaCon - p.total)}\n`;
   else t += "💵 Efectivo — no dijo con cuánto paga (lleva cambio)\n";
@@ -1308,7 +1328,10 @@ async function confirmarPedido(c) {
     estado: "recibido",
     alertado: false,
     actualizado: ahora(),
+    comprobante: anterior ? anterior.comprobante : Boolean(c.comprobantePrevio),
+    pagoVerificado: anterior ? anterior.pagoVerificado && anterior.total === total : false,
   };
+  c.comprobantePrevio = false;
   c.estado = "confirmado";
   c.paso = "";
   c.pasoVeces = 0;
@@ -1326,7 +1349,7 @@ async function confirmarPedido(c) {
     if (c.pago === "nequi") msg += `\n\n💜 Transfiere ${pesos(total)} al Nequi *${NEQUI}*${NEQUI_TITULAR ? ` (a nombre de ${NEQUI_TITULAR})` : ""} y mándame el pantallazo por aquí 📸`;
   }
   await responder(c, msg);
-  await avisarEquipo(textoCocina(c.pedido, anterior, c));
+  await avisarEquipo(textoCocina(c.pedido, anterior, c), EQUIPO, botonesPedido(c.pedido));
   if (c.pedido.entrega !== "recoger") await avisarEquipo(textoDomiciliario(c.pedido, c, Boolean(anterior)));
   if (!anterior) await enviarMeme(c, "confirmado");
 }
@@ -1440,7 +1463,9 @@ async function pasarAHumano(c, motivo, { tipo = "persona", mensaje, extra } = {}
   if (c.barrio) aviso += `Barrio: ${c.barrio}${c.direccion ? " — " + c.direccion : ""}\n`;
   aviso += `\nResponde: #${codigo} tu mensaje\nDevolver al bot: #${codigo} bot`;
   if (extra) aviso += `\n${extra}`;
-  await avisarEquipo(aviso, COCINA ? [COCINA] : EQUIPO);
+  const botonesAviso = [[`cmd:bot:${codigo}`, "🤖 Devolver al bot"]];
+  if (p?.pago === "nequi" && !p.pagoVerificado && ["recibido", "en_camino"].includes(p.estado)) botonesAviso.unshift([`cmd:pagook:${p.codigo}`, "💜 Pago OK"]);
+  await avisarEquipo(aviso, COCINA ? [COCINA] : EQUIPO, botonesAviso);
 }
 
 async function revisarPersonas() {
@@ -1795,9 +1820,13 @@ async function procesarTurno(c, entrada) {
 
 // ======================= COMANDOS DEL EQUIPO =======================
 const AYUDA = () => `🤖 COMANDOS ${MARCA.toUpperCase()}
+(Casi todo también está en botones: en cada aviso de pedido, y en el menú de cocina de abajo 👇. Para abrirlo cuando quieras: /menu)
+
 #7 texto → le escribes al cliente #7 (el bot se pausa con él)
 #7 bot → el bot vuelve a atender al #7
 /salio 7 → le avisa al cliente que va en camino
+/pagook 7 → viste la plata en tu Nequi: pago confirmado
+/pagomal 7 → no llegó (o llegó incompleto): el bot le avisa con tacto y te pasa el chat
 /entregado 7 → cierra el pedido
 /cancelar 7 motivo → cancela y le avisa al cliente
 /aceptar 7 4000 → sí llegan al barrio del #7, con ese valor de domicilio
@@ -1808,9 +1837,51 @@ const AYUDA = () => `🤖 COMANDOS ${MARCA.toUpperCase()}
 
 ⚠️ Escríbele algo al bot cada día (por ejemplo /abrir al empezar): WhatsApp solo deja que el bot te mande avisos si le escribiste en las últimas 24 horas.`;
 
+// Menú de cocina con un toque (lo general; lo de cada pedido va en los botones del aviso)
+async function enviarMenuCocina(a) {
+  const r = await enviar(a, {
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "🧑‍🍳 Menú de cocina: elige una acción 👇" },
+      action: {
+        button: "Ver acciones",
+        sections: [
+          { title: "Pedidos", rows: [{ id: "cmd:pedidos", title: "📋 Pedidos activos", description: "Cómo va cada pedido y cada pago" }] },
+          {
+            title: "Atención",
+            rows: [
+              { id: "cmd:abrir", title: "✅ Abrir pedidos" },
+              { id: "cmd:cerrar", title: "🔒 Cerrar pedidos", description: "El bot deja de recibir pedidos nuevos" },
+              { id: "cmd:demora:50", title: "⏱️ Hay demora (50 min)" },
+              { id: "cmd:demora:normal", title: "⏱️ Tiempo normal" },
+            ],
+          },
+          {
+            title: "Productos",
+            rows: [
+              { id: "cmd:menuagotar", title: "🚫 Se acabó algo" },
+              { id: "cmd:menuhay", title: "✅ Volvió a haber" },
+            ],
+          },
+        ],
+      },
+    },
+  });
+  if (!r.ok) await enviarTexto(a, AYUDA());
+  return r;
+}
+// Botón o fila tocada por cocina → el mismo comando escrito
+function comandoDeBoton(id) {
+  const [, cmd, x, y] = String(id).split(":");
+  if (cmd === "bot") return `#${x} bot`;
+  if ((cmd === "agotado" || cmd === "hay") && PRODUCTOS[x]) return `/${cmd} ${PRODUCTOS[x].nombre}`;
+  return `/${[cmd, x, y].filter(Boolean).join(" ")}`;
+}
+
 async function comandoEquipo(a, texto) {
   const t = texto.trim();
-  const responderA = (msg) => enviarTexto(a, msg);
+  const responderA = (msg, botones = null) => (botones?.length ? enviarBotones(a, msg, botones, "") : enviarTexto(a, msg));
 
   // #7 mensaje / #7 bot
   const m = t.match(/^#\s*(\d+)\s*([\s\S]*)$/);
@@ -1858,7 +1929,28 @@ async function comandoEquipo(a, texto) {
   switch (cmd) {
     case "ayuda":
     case "comandos":
-      return responderA(AYUDA());
+      await responderA(AYUDA());
+      return enviarMenuCocina(a);
+    case "":
+    case "menu":
+    case "acciones":
+      return enviarMenuCocina(a);
+    case "menuagotar":
+    case "menuhay": {
+      const ids = cmd === "menuagotar" ? IDS.filter((i) => !agotados.has(i)) : [...agotados];
+      if (!ids.length) return responderA(cmd === "menuhay" ? "✅ No hay nada agotado." : "Todo está agotado 😅");
+      return enviar(a, {
+        type: "interactive",
+        interactive: {
+          type: "list",
+          body: { text: cmd === "menuagotar" ? "¿Qué se acabó? 🚫" : "¿Qué volvió a haber? ✅" },
+          action: {
+            button: "Elegir producto",
+            sections: [{ title: "Productos", rows: ids.slice(0, 10).map((i) => ({ id: `cmd:${cmd === "menuagotar" ? "agotado" : "hay"}:${i}`, title: cortar(PRODUCTOS[i].corto || PRODUCTOS[i].nombre, 24) })) }],
+          },
+        },
+      });
+    }
     case "abrir":
       cerradoManual = false;
       return responderA(`✅ Abierto: el bot está tomando pedidos.${dentroDeHorario() ? "" : "\n(Ojo: estás fuera del horario de menu.js, así que el bot seguirá diciendo que está cerrado.)"}`);
@@ -1879,10 +1971,44 @@ async function comandoEquipo(a, texto) {
       else tiempoEntrega = /^\d+$/.test(arg) ? `unos ${arg} minutos` : arg;
       return responderA(`⏱️ Tiempo de entrega para pedidos nuevos: ${tiempoEntrega}`);
     }
+    case "pagook":
+    case "pagobien": {
+      const { c, p } = pedidoDe(arg.split(/\s+/)[0]);
+      if (!p) return responderA(`No encontré el pedido #${arg}.`);
+      p.pagoVerificado = true;
+      p.actualizado = ahora();
+      const r = await enviarTexto(c.num, `✅ ¡Pago confirmado! Gracias 💜 ${p.estado === "en_camino" ? "Tu pedido ya va en camino 🛵" : "Tu pedido sigue en cocina y te aviso cuando salga 🛵"}`);
+      if (r.ok) await enviarMeme(c, "nequi");
+      return responderA(`✅ Pago del #${p.codigo} verificado (${pesos(p.total)}).${p.estado === "recibido" ? " Cuando salga, toca 🛵 Salió." : ""}`, botonesPedido(p));
+    }
+    case "pagomal": {
+      const [num, ...motivo] = arg.split(/\s+/);
+      const { c, p } = pedidoDe(num);
+      if (!p) return responderA(`No encontré el pedido #${num}.`);
+      p.pagoVerificado = false;
+      p.actualizado = ahora();
+      const razon = motivo.join(" ").trim();
+      await pasarAHumano(c, `Pago por Nequi NO verificado del pedido #${p.codigo} (${pesos(p.total)})${razon ? `: ${razon}` : ""}`, {
+        tipo: "pedido",
+        mensaje: `Uy 😕 No vemos tu pago de ${pesos(p.total)} en nuestro Nequi${razon ? ` (${razon})` : ""}. ¿Lo revisas porfa? Si ya pagaste, mándame otra vez el comprobante 📸, o dime si prefieres pagar en efectivo al recibir. Tu pedido queda apartado mientras tanto 🙏`,
+        extra: `Si ya llegó: /pagook ${p.codigo} · Si paga en efectivo, escríbele: #${c.codigo} listo, pagas en efectivo`,
+      });
+      return responderA(`❌ Le avisé al #${p.codigo} que el pago no aparece. El chat quedó contigo.`);
+    }
     case "salio":
     case "listo": {
-      const { c, p } = pedidoDe(arg);
+      const [numSalio, confirma] = arg.split(/\s+/);
+      const { c, p } = pedidoDe(numSalio);
       if (!p) return responderA(`No encontré el pedido #${arg}.`);
+      if (p.pago === "nequi" && !p.pagoVerificado && !/^(si|sí|ya)$/i.test(confirma || "")) {
+        return responderA(
+          `⚠️ El #${p.codigo} es por Nequi y el pago NO está verificado${p.comprobante ? " (mandó pantallazo, pero revisa tu app)" : " (ni siquiera mandó pantallazo)"}.\nRevisa tu Nequi: /pagook ${p.codigo}\nSi igual sale: /salio ${p.codigo} si`,
+          [
+            [`cmd:pagook:${p.codigo}`, "💜 Pago OK"],
+            [`cmd:salio:${p.codigo}:si`, "🛵 Salir igual"],
+          ]
+        );
+      }
       p.estado = "en_camino";
       p.actualizado = ahora();
       const r = await enviarTexto(
@@ -1890,7 +2016,7 @@ async function comandoEquipo(a, texto) {
         p.entrega === "recoger" ? `🎉 ¡Tu pedido #${p.codigo} ya está listo! Te esperamos en ${LOCAL}.` : `🛵 ¡Tu pedido #${p.codigo} ya va en camino! Llega en unos minutos.`
       );
       if (r.ok && p.entrega !== "recoger") await enviarMeme(c, "salio");
-      return responderA(r.ok ? `✅ Le avisé al cliente #${p.codigo}.` : `⚠️ No pude avisarle al cliente #${p.codigo}.`);
+      return responderA(r.ok ? `✅ Le avisé al cliente #${p.codigo} que va en camino.` : `⚠️ No pude avisarle al cliente #${p.codigo}.`, botonesPedido(p));
     }
     case "entregado": {
       const { c, p } = pedidoDe(arg);
@@ -1934,7 +2060,8 @@ async function comandoEquipo(a, texto) {
       const esperando = [];
       for (const c of clientes.values()) {
         if (c.pedido && ["recibido", "en_camino"].includes(c.pedido.estado)) {
-          activos.push(`#${c.pedido.codigo} ${estadoLegible(c.pedido)} (${minutosDesde(c.pedido.ts)} min) — ${c.pedido.lista}`);
+          const pago = c.pedido.pago === "nequi" ? (c.pedido.pagoVerificado ? " 💜✅" : c.pedido.comprobante ? " 💜❓ por verificar" : " 💜⏳ sin pantallazo") : "";
+          activos.push(`#${c.pedido.codigo} ${estadoLegible(c.pedido)} (${minutosDesde(c.pedido.ts)} min)${pago} — ${c.pedido.lista}`);
         }
         if (c.humano) esperando.push(`#${c.codigo} ${c.humano.esperandoDesde ? `esperando hace ${minutosDesde(c.humano.esperandoDesde)} min` : "atendido"} — ${c.humano.motivo}`);
       }
@@ -1962,9 +2089,14 @@ async function revisarPendientes() {
     }
     // Pedido que no ha salido: alerta a cocina
     const p = c.pedido;
+    // Nequi sin pantallazo a los 10 min: un recordatorio al cliente
+    if (p && p.pago === "nequi" && p.estado === "recibido" && !p.comprobante && !p.pagoVerificado && !p.recordoComprobante && !c.humano && t - p.ts > T.recordarConfirmacion) {
+      p.recordoComprobante = true;
+      await enviarTexto(c.num, `¿Ya hiciste la transferencia de ${pesos(p.total)} al Nequi ${NEQUI}? 💜 Cuando puedas, mándame el pantallazo por aquí 📸`);
+    }
     if (p && p.estado === "recibido" && !p.alertado && t - p.ts > T.alertaPedido) {
       p.alertado = true;
-      await avisarEquipo(`⏰ El pedido #${p.codigo} lleva ${minutosDesde(p.ts)} min y no ha salido.\nCuando salga: /salio ${p.codigo}`);
+      await avisarEquipo(`⏰ El pedido #${p.codigo} lleva ${minutosDesde(p.ts)} min y no ha salido.\nCuando salga: /salio ${p.codigo}`, EQUIPO, botonesPedido(p));
     }
     // Limpieza de memoria
     const activo = p && ["recibido", "en_camino"].includes(p.estado);
@@ -2035,6 +2167,10 @@ async function recibir(m, nombrePerfil, contacto = null) {
 
   // Comandos del equipo: empiezan con / o #. Cualquier otro mensaje del equipo se atiende como cliente (sirve para probar).
   if (esEquipo && /^\s*[/#]/.test(textoPlano)) return encolar(`equipo:${num}`, () => comandoEquipo(num, textoPlano));
+  if (esEquipo && m.type === "interactive") {
+    const rid = String((m.interactive?.button_reply || m.interactive?.list_reply || {}).id || "");
+    if (rid.startsWith("cmd:")) return encolar(`equipo:${num}`, () => comandoEquipo(num, comandoDeBoton(rid)));
+  }
 
   const c = obtenerCliente(num, nombrePerfil);
   marcarLeido(m.id);
@@ -2117,20 +2253,30 @@ async function manejarArchivo(c, m) {
   if (esComprobante) caption += " — posible comprobante de Nequi";
   if (media.caption) caption += `: “${media.caption}”`;
   if (p) caption += `\nPedido #${p.codigo}: total ${pesos(p.total)}`;
+  if (esComprobante && p) {
+    caption += `\n\n👉 Revisa en TU app de Nequi que llegaron ${pesos(p.total)} (valor exacto, hora y quién envía). El pantallazo solo no basta.\n✅ Llegó: /pagook ${p.codigo}\n❌ No llegó: /pagomal ${p.codigo}`;
+  }
   caption += `\nResponde: #${codigo} tu mensaje`;
 
   if (c.humano) {
     await reenviarArchivo(media, tipo, caption, c.humano.escalado || !COCINA ? EQUIPO : [COCINA]);
+    if (esComprobante && p && !p.pagoVerificado) {
+      await avisarEquipo(`💜 ¿Llegaron ${pesos(p.total)} del #${p.codigo} a tu Nequi?`, c.humano.escalado || !COCINA ? EQUIPO : [COCINA], botonesPedido(p));
+    }
     c.humano.ultimoMsgCliente = ahora();
     if (!c.humano.esperandoDesde) c.humano.esperandoDesde = ahora();
     return;
   }
   await reenviarArchivo(media, tipo, caption, EQUIPO);
+  if (esComprobante && p && !p.pagoVerificado) await avisarEquipo(`💜 ¿Llegaron ${pesos(p.total)} del #${p.codigo} a tu Nequi?`, EQUIPO, botonesPedido(p));
   if (esComprobante) {
-    if (p) p.comprobante = true;
-    await responder(c, "¡Recibido! 🙌 Ya le pasé el comprobante a cocina para verificarlo.");
-    await enviarMeme(c, "nequi");
-    return;
+    if (p) {
+      p.comprobante = true;
+      if (p.pagoVerificado) return responder(c, "¡Recibido! 🙌 Tu pago ya está confirmado 💜");
+      return responder(c, "¡Recibido! 🙌 Tu pedido ya está en cocina 👩‍🍳 y estamos verificando el pago. Te aviso apenas quede confirmado 💜");
+    }
+    c.comprobantePrevio = true;
+    return responder(c, "¡Recibido! 🙌 Apenas confirmes el pedido lo verificamos 💜");
   }
   return pasarAHumano(c, `Envió ${tipo === "image" ? "una imagen" : "un archivo"}`, {
     tipo: "persona",
