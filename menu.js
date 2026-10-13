@@ -58,7 +58,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["gaseosa", "gaseosas", "coca cola", "cocacola", "coca", "postobon", "colombiana", "manzana", "uva"],
     opciones: ["Coca-Cola", "Coca-Cola sin azúcar", "Postobón manzana", "Postobón uva", "Colombiana"],
-    enLista: true,
+    enLista: false,
   },
   gaseosa_grande: {
     nombre: "Gaseosa 1.5 L",
@@ -67,7 +67,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["gaseosa grande", "litro y medio", "1.5", "1,5", "gaseosa familiar"],
     opciones: ["Coca-Cola", "Postobón manzana", "Colombiana"],
-    enLista: true,
+    enLista: false,
   },
   agua: {
     nombre: "Agua 600 ml",
@@ -76,7 +76,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["agua", "botella de agua", "agua con gas"],
     opciones: ["Sin gas", "Con gas"],
-    enLista: true,
+    enLista: false,
   },
   jugo: {
     nombre: "Jugo Hit 500 ml",
@@ -85,7 +85,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["jugo", "jugos", "hit"],
     opciones: ["Mango", "Mora", "Lulo", "Naranja-piña"],
-    enLista: true,
+    enLista: false,
   },
   te_frio: {
     nombre: "Té frío 400 ml",
@@ -94,7 +94,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["te", "te frio", "mr tea"],
     opciones: ["Durazno", "Limón"],
-    enLista: true,
+    enLista: false,
   },
 };
 
@@ -103,10 +103,13 @@ export const PRODUCTOS = {
 export const SALSAS = {
   incluidas: ["Salsa rosada", "Salsa de piña", "Mayonesa", "Salsa de tomate"],
   porDefecto: "Todas las salsas de la casa",
+  mostrarEnMenu: false, // false = el menú no habla de salsas (van incluidas igual)
+  mostrarEnResumen: false, // false = el resumen solo las menciona si el cliente pidió algo especial ("sin piña")
 };
 
 export const NEGOCIO = {
   // ---------- IDENTIDAD (cómo se presenta el bot) ----------
+  mensajesCortos: true, // true = saludo, menú y respuestas cortos (la gente lee la notificación sin abrir el chat)
   marca: "Pedidito", // nombre del negocio que dice el bot. Cámbialo por la marca de las salchipapas si tienen una.
   emoji: "🍟",
   lema: "Salchipapas recién hechas, a domicilio.",
@@ -185,8 +188,10 @@ export const NEGOCIO = {
 export const MEMES = {
   activo: true, // false = el bot no manda ningún meme
   probabilidad: 0.5, // 0.5 = la mitad de las veces · 1 = siempre · 0.3 = de vez en cuando
-  maximoPorPedido: 3, // máximo de memes en una misma conversación (para que no canse)
-  siempre: ["sticker"], // momentos en los que el meme sale siempre (no cuentan en el máximo)
+  maximoPorPedido: 3,
+  pausaSaludoSegundos: 5, // después del meme del saludo, espera esto antes de mandar el menú (solo si salió meme)
+  pausaSegundos: 2.5, // la misma pausa en los demás momentos (corta, para no demorar el pedido) // máximo de memes en una misma conversación (para que no canse)
+  siempre: ["sticker", "confirmado"], // momentos en los que el meme sale siempre (no cuentan en el máximo)
   horaNoche: "21", // desde esta hora (formato 24 h) se usa "entregado_noche" en vez de "entregado"
 
   momentos: {
@@ -198,7 +203,7 @@ export const MEMES = {
     cambio: ["cambio.jpg"], // paga con billete de $100.000 o más
     confirmado: ["confirmado.jpg", "confirmado_2.jpg"], // confirmó el pedido
     sin_confirmar: ["sin_confirmar.jpg"], // no confirmó el resumen en 10 minutos
-    nequi: ["nequi.jpg"], // mandó el comprobante de Nequi
+    nequi: ["nequi.jpg"], // cocina verificó el pago de Nequi (/pagook)
     salio: ["salio.jpg", "salio_2.jpg"], // /salio desde cocina
     entregado: ["entregado.jpg"], // /entregado de día
     entregado_noche: ["entregado_noche.jpg"], // /entregado de noche
