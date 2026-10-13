@@ -153,7 +153,8 @@ export const NEGOCIO = {
   horaAbre: "",
   horaCierra: "",
 
-  nequi: "", // número de Nequi; vacío = solo efectivo
+  nequi: "", // ⚠️ número de Nequi del negocio, ej: "3001234567". Vacío = solo efectivo. Con número, el bot ofrece botones Nequi / Efectivo
+  nequiTitular: "", // a nombre de quién está el Nequi, ej: "Sergio E." (el cliente lo ve al transferir y confía más)
   telefono: "", // número para llamar si hay una urgencia
   direccionLocal: "", // si se puede recoger en el local, pon la dirección; vacío = solo domicilio
 
