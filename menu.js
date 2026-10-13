@@ -125,8 +125,8 @@ export const NEGOCIO = {
   barrios: {},
 
   // OPCIONAL: cobrar por distancia cuando el cliente manda su ubicación 📍.
-  // Pon la ubicación de la cocina así: ubicacionLocal: { lat: 2.4448, lng: -76.6147 },
-  ubicacionLocal: null,
+  // Ubicación de la cocina (sacada del enlace de Google Maps que mandaste).
+  ubicacionLocal: { lat: 2.4419948, lng: -76.6028088 },
   tarifasPorDistancia: [
     { hastaKm: 1, valor: 1500 }, // ⚠️ valores de ejemplo
     { hastaKm: 2.5, valor: 2500 },
