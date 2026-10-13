@@ -75,6 +75,7 @@ const TABLA_DISTANCIA = (NEGOCIO.tarifasPorDistancia || [])
 const POR_DISTANCIA = Boolean(LOCAL_GPS && TABLA_DISTANCIA.length);
 const PEDIDO_MINIMO = Number(NEGOCIO.pedidoMinimo) || 0;
 const NEQUI = soloDigitos(NEGOCIO.nequi);
+const NEQUI_TITULAR = String(NEGOCIO.nequiTitular || "").trim(); // a nombre de quién está el Nequi (el cliente lo ve al transferir)
 const TELEFONO = String(NEGOCIO.telefono || "").trim();
 const LOCAL = String(NEGOCIO.direccionLocal || "").trim();
 const IMAGEN_MENU = String(NEGOCIO.imagenMenu || "").trim();
@@ -251,6 +252,7 @@ function menuTexto() {
     alFinal.push(`🌶️ Incluye ${sal.length <= 2 ? sal.join(" o ") : sal.slice(0, -1).join(", ") + " y " + sal.at(-1)}${salsaExtra != null ? ` (porción extra ${pesos(salsaExtra)})` : ""}`);
   }
   if (textoTarifas()) alFinal.push(`🛵 Domicilio: ${textoTarifas()}`);
+  alFinal.push(NEQUI ? "💜 Pagas por Nequi o en efectivo" : "💵 Pago en efectivo al recibir");
   if (PEDIDO_MINIMO) alFinal.push(`Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}`);
   return unir(principales.join("\n\n"), alFinal.join("\n"));
 }
@@ -385,6 +387,7 @@ function reiniciarSiHaceFalta(c) {
     memeCambio: false,
     memesPedido: 0,
     cantidadPendiente: null,
+    pidioTelefono: false,
     pidioUbicacion: false,
     estado: "armando",
     recordoConfirmacion: false,
@@ -800,7 +803,7 @@ INFORMACIÓN DEL NEGOCIO (es lo único que sabes; no inventes nada más):
 ${infoNegocio()}
 
 CAMPOS DEL JSON:
-- intencion: "saludo" | "pedido" (pide o cambia productos, o da barrio, dirección, nombre, salsas o forma de pago) | "pregunta" | "confirmar" (acepta el resumen) | "cancelar" (ya no quiere el pedido) | "estado_pedido" (pregunta por un pedido ya confirmado: "¿ya viene?", "¿cuánto falta?") | "queja" (problema con un pedido ya hecho o entregado: demora excesiva, llegó frío, incompleto, equivocado, cobro mal; o molestia con el servicio) | "hablar_humano" (pide una persona) | "agradecimiento" | "otro".
+- intencion: "saludo" | "pedido" (pide o cambia productos, o da barrio, dirección, nombre, salsas o forma de pago) | "pregunta" | "confirmar" (acepta el resumen) | "cancelar" (ya no quiere el pedido) | "estado_pedido" (pregunta por un pedido ya confirmado: "¿ya viene?", "¿cuánto falta?") | "queja" (problema con un pedido ya hecho o entregado: demora excesiva, llegó frío, incompleto, equivocado, cobro mal; o molestia con el servicio) | "hablar_humano" (pide de forma clara hablar con una persona; OJO: "háblalo", "háblame", "qué hubo", "quiubo", "oe", "bien o qué" son SALUDOS colombianos, intencion = "saludo") | "agradecimiento" | "otro".
 - productos: el pedido COMPLETO como debe quedar (lo del carrito actual + los cambios del cliente). Si en este mensaje no habla de productos, devuelve [].
 - falta_aclarar: true solo si tu respuesta pregunta algo sobre los productos (cuál, cuántos o qué sabor).
 - entrega: "recoger" si dice que pasa a recoger; "domicilio" si lo pide a domicilio; si no lo dice, "".
@@ -926,9 +929,12 @@ const esNegacion = (t) => {
   const limpio = norm(t).replace(/[¿?¡!.,;👍🙏😊🙂]+/gu, " ").replace(RELLENO, " ").replace(/\s+/g, " ").trim();
   return limpio === "" ? /gracias/.test(norm(t)) : FIN.test(limpio);
 };
-const PALABRA_SALUDO = "hola+|holi+|ola+|buenas+|buenos dias|buen dia|buenas tardes|buenas noches|hey+|que mas|q mas|quiubo|quibo|epa|saludos";
-const EXTRA_SALUDO =
-  "como (estas|esta|vas|va|amaneciste|le va|te va)|que tal|todo bien|vecino|vecina|amigo|amiga|senor|senora|joven|don|dona|muchachos|chicos|cruji";
+// Incluye la jerga colombiana: "háblalo", "qué hubo", "oe", "bien o qué"... (son saludos, NO "quiero hablar con alguien")
+const PALABRA_SALUDO =
+  "hola+|holi+|ola+|buenas+|buenos dias|buen dia|buenas tardes|buenas noches|hey+|que mas|q mas|quiubo|quibo|quihubo|que hubo|q hubo|quiubole|epa|saludos|hablalo|hablame|habla pues|habla|oe+|oee+|ole|alo|que hay|que se dice|que cuenta|que cuentas|bien o que|bueno o que|que hace|que haces";
+const EXTRA_SALUDO = `como (estas|esta|vas|va|amaneciste|le va|te va)|que tal|todo bien|vecino|vecina|amigo|amiga|senor|senora|joven|don|dona|muchachos|chicos|parce|parcero|parcera|mor|socio|mijo|mija|pues|ve|bro|cruji${
+  MARCA ? "|" + MARCA.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ ]/g, "") : ""
+}`;
 const SALUDO = new RegExp(`^(${PALABRA_SALUDO})( (${PALABRA_SALUDO}|${EXTRA_SALUDO}))*$`);
 const esSaludo = (t) => SALUDO.test(norm(t).replace(/[¿?¡!.,;👋😊🙂]+/gu, " ").replace(/\s+/g, " ").trim());
 const MENU_RECIENTE = 30 * MIN;
@@ -960,7 +966,7 @@ async function saludar(c) {
   return responder(c, `${hola} ¿Qué se te antoja hoy? 😊 (Si quieres ver el menú otra vez, escribe *menú*)`);
 }
 
-const FLUJO = new Set(["tipo", "aclarar", "opcion", "mas", "minimo", "bebida", "direccion", "ubicacion", "pago", "cambio"]);
+const FLUJO = new Set(["telefono", "tipo", "aclarar", "opcion", "mas", "minimo", "bebida", "direccion", "ubicacion", "pago", "cambio"]);
 const RECORDATORIO_PASO = {
   mas: "¿Algo más? Si ya está, dime *no, gracias* y seguimos 😊",
   direccion: "Cuando puedas, me pasas la dirección 🏠",
@@ -969,6 +975,7 @@ const RECORDATORIO_PASO = {
   opcion: "Y me dices de qué sabor 😊",
   aclarar: "Y me confirmas qué productos quieres 😊",
   tipo: "Y me dices cuál quieres 😊",
+  telefono: "Y si puedes, me pasas tu celular para el domiciliario 📱",
 };
 
 // ---------- "Una salchi" sin decir cuál: preguntar con botones ----------
@@ -1157,16 +1164,32 @@ async function siguientePaso(c, r, avisos = []) {
     }
   }
 
+  // Número oculto: pedir un celular para que el domiciliario pueda llamar (una vez, sin obligar)
+  if (domicilio && !esTelefono(c.num) && !c.telefono && !c.pidioTelefono) {
+    c.pidioTelefono = true;
+    return pregunta(c, "telefono", `${pre}¿Me regalas tu número de celular? 📱 Es solo para que el domiciliario te pueda llamar si no encuentra la dirección.`);
+  }
+
   if (!c.pago) {
     if (!c.preguntoPago) {
       c.preguntoPago = true;
-      return pregunta(
-        c,
-        "pago",
-        NEQUI
-          ? `${pre}¿Pagas en efectivo o por Nequi? Si es efectivo, dime con cuánto pagas para llevarte el cambio 💵`
-          : `${pre}El pago es en efectivo al recibir 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`
-      );
+      if (NEQUI) {
+        // Botones: Nequi primero (es lo que más se usa)
+        c.paso = "pago";
+        c.pasoVeces = 1;
+        const texto = `${pre}¿Cómo vas a pagar? 👇`;
+        recordar(c, "assistant", texto);
+        return enviarBotones(
+          c.num,
+          texto,
+          [
+            ["pago_nequi", "💜 Nequi"],
+            ["pago_efectivo", "💵 Efectivo"],
+          ],
+          "Escríbeme *Nequi* o *efectivo* (y con cuánto pagas, para llevarte el cambio)"
+        );
+      }
+      return pregunta(c, "pago", `${pre}El pago es en efectivo al recibir 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
     }
     c.pago = "efectivo";
   }
@@ -1201,7 +1224,12 @@ async function enviarResumen(c, pre = "") {
 }
 
 const mapa = (u) => `https://maps.google.com/?q=${u.lat},${u.lng}`;
-const enlaceCliente = (c) => (esTelefono(c.num) ? `wa.me/${c.num}` : `número oculto (respóndele por aquí: #${c.codigo} tu mensaje)`);
+const enlaceCliente = (c) =>
+  esTelefono(c.num)
+    ? `wa.me/${c.num}`
+    : c.telefono
+    ? `📱 ${telLocal(c.telefono)} (número oculto en WhatsApp: respóndele por aquí con #${c.codigo} tu mensaje)`
+    : `número oculto (respóndele por aquí: #${c.codigo} tu mensaje)`;
 const telLocal = (num) => (num.startsWith("57") && num.length === 12 ? `${num.slice(2, 5)} ${num.slice(5, 8)} ${num.slice(8)}` : num);
 
 // Tarjeta lista para reenviar al domiciliario
@@ -1209,7 +1237,9 @@ function textoDomiciliario(p, c, actualizado = false) {
   let t = `🛵 DOMICILIO #${p.codigo}${actualizado ? " (ACTUALIZADO)" : ""} — ${MARCA}\n`;
   t += esTelefono(c.num)
     ? `👤 ${c.nombre || "Cliente"} — ${telLocal(c.num)}\n💬 wa.me/${c.num}\n`
-    : `👤 ${c.nombre || "Cliente"} — número oculto (el domiciliario no puede llamarlo: escríbele tú con #${c.pedido?.codigo || c.codigo} texto)\n`;
+    : c.telefono
+    ? `👤 ${c.nombre || "Cliente"} — 📞 ${telLocal(c.telefono)}\n`
+    : `👤 ${c.nombre || "Cliente"} — sin teléfono (no lo quiso dar; si hace falta, escríbele tú con #${c.pedido?.codigo || c.codigo} texto)\n`;
   t += `📍 ${p.barrio}${p.direccion ? " — " + p.direccion : ""}\n`;
   t += p.ubicacion ? `🗺️ ${mapa(p.ubicacion)}\n` : "🗺️ Sin ubicación GPS: si no encuentras, llama al cliente\n";
   if (p.pago === "nequi") t += `💜 Pago por Nequi (${pesos(p.total)}): confirma con cocina antes de entregar\n`;
@@ -1293,7 +1323,7 @@ async function confirmarPedido(c) {
       c.entrega === "recoger"
         ? `¡Confirmado! 🎉 Tu pedido #${codigo} ya está en cocina. Estará listo en ${tiempoEntrega} aprox. en ${LOCAL}. Te aviso cuando esté listo 😊`
         : `¡Confirmado! 🎉 Tu pedido #${codigo} ya está en cocina. Llega en ${tiempoEntrega} aprox. Te aviso cuando salga 🛵`;
-    if (c.pago === "nequi") msg += `\n\n💜 Transfiere ${pesos(total)} al Nequi ${NEQUI} y mándame el pantallazo por aquí.`;
+    if (c.pago === "nequi") msg += `\n\n💜 Transfiere ${pesos(total)} al Nequi *${NEQUI}*${NEQUI_TITULAR ? ` (a nombre de ${NEQUI_TITULAR})` : ""} y mándame el pantallazo por aquí 📸`;
   }
   await responder(c, msg);
   await avisarEquipo(textoCocina(c.pedido, anterior, c));
@@ -1473,7 +1503,7 @@ async function procesarTurno(c, entrada) {
   const t = ahora();
   c.ultimaActividad = t;
   const texto = String(entrada.texto || "").trim();
-  if (texto) recordar(c, "user", texto);
+  if (texto && !entrada.yaRecordado) recordar(c, "user", texto);
   c.ultimoTexto = texto;
 
   // A) Conversación en manos de una persona: el bot solo reenvía
@@ -1484,6 +1514,8 @@ async function procesarTurno(c, entrada) {
       h.esperandoDesde = t;
       h.recordatorios = 0;
     }
+    // Lo que el cliente escribe y nadie le ha contestado: si devuelven el chat al bot, el bot lo responde
+    if (texto) h.sinResponder = [...(h.sinResponder || []), texto].slice(-5);
     const destinos = h.escalado || !COCINA ? EQUIPO : [COCINA];
     await avisarEquipo(`💬 #${c.codigo} ${c.nombre || ""}: ${texto || "(mensaje)"}\nResponde: #${c.codigo} tu mensaje`, destinos);
     return;
@@ -1599,6 +1631,32 @@ async function procesarTurno(c, entrada) {
     if (c.estado === "esperando_confirmacion") return enviarResumen(c);
     if (c.pedido) return responder(c, `Tu pedido #${c.pedido.codigo} ya está confirmado 😊`);
   }
+  // Celular para el domiciliario (clientes con número oculto)
+  if (c.paso === "telefono" && c.estado === "armando" && c.carrito.length) {
+    const cel = soloDigitos(texto).replace(/^57(?=3\d{9}$)/, "");
+    if (/^3\d{9}$/.test(cel)) {
+      c.telefono = "57" + cel;
+      return siguientePaso(c, null, ["¡Gracias! 📱 Anotado."]);
+    }
+    if (esNegacion(texto) || /prefiero no|no (lo )?quiero|no doy|sin numero|no tengo/.test(n)) return siguientePaso(c, null, ["Listo, sin problema 😊"]);
+    if (/\d{7,}/.test(soloDigitos(texto)) && soloDigitos(texto).length <= 12) {
+      return pregunta(c, "telefono", "Mmm, ese número no me cuadra 🤔 ¿Me lo pasas así: 3001234567? (si prefieres no darlo, dime *no*)");
+    }
+  }
+
+  // Botones de pago
+  if (entrada.boton === "pago_nequi" && c.carrito.length && NEQUI) {
+    c.pago = "nequi";
+    c.pagaCon = null;
+    if (c.estado === "esperando_confirmacion") return enviarResumen(c, "Listo, por Nequi 💜\n\n");
+    return siguientePaso(c, null);
+  }
+  if (entrada.boton === "pago_efectivo" && c.carrito.length) {
+    c.pago = "efectivo";
+    if (c.estado === "esperando_confirmacion") c.estado = "armando";
+    return pregunta(c, "pago", `¡Listo! 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
+  }
+
   // "No, así está bien" después de ofrecer bebida: seguir sin gastar modelo
   if (c.paso === "bebida" && c.estado === "armando" && c.carrito.length && esNegacion(texto)) return siguientePaso(c, null);
   // "No tengo datos / no sé cómo" al pedir la ubicación: seguir sin ella
@@ -1762,8 +1820,18 @@ async function comandoEquipo(a, texto) {
     const msg = m[2].trim();
     if (!msg) return responderA(`Escribe el mensaje después del número. Ej: #${m[1]} Hola, ya sale tu pedido`);
     if (norm(msg) === "bot") {
+      const sinResponder = c.humano?.sinResponder || [];
       liberarDeHumano(c);
-      return responderA(`🤖 El bot vuelve a atender al #${m[1]}.`);
+      silenciarMemes(c, 30); // acaba de hablar con una persona: sin chistes por un rato
+      if (sinResponder.length) {
+        // El cliente escribió algo que nadie contestó: el bot se lo responde de una
+        await responderA(`🤖 El bot vuelve a atender al #${m[1]} y ya le responde lo último que escribió: “${cortar(sinResponder.join(" / "), 120)}”`);
+        return encolar(c.num, () => turnoSeguro(c, { texto: sinResponder.join("\n"), yaRecordado: true }));
+      }
+      await responderA(`🤖 El bot vuelve a atender al #${m[1]}.`);
+      // Sin nada pendiente: el bot retoma donde iba, sin dejar al cliente en el aire
+      if (c.carrito.length && !c.pedido) return encolar(c.num, () => siguientePaso(c, null, ["Listo 😊 Sigo yo con tu pedido."]));
+      return encolar(c.num, () => responder(c, `Aquí sigo yo para lo que necesites 😊${c.pedido ? "" : ` Si se te antoja algo, escríbeme ${EMOJI}`}`));
     }
     const r = await enviarTexto(c.num, msg);
     if (!r.ok) return responderA(`⚠️ No pude enviarle el mensaje al #${m[1]}. Si pasaron más de 24 h desde su último mensaje, WhatsApp no deja escribirle.`);
@@ -1774,6 +1842,7 @@ async function comandoEquipo(a, texto) {
     c.humano.ultimaRespuesta = ahora();
     c.humano.esperandoDesde = null;
     c.humano.recordatorios = 0;
+    c.humano.sinResponder = []; // la persona ya le contestó
     return responderA(`✅ Enviado al #${m[1]}. Cuando termines: #${m[1]} bot`);
   }
 
