@@ -37,8 +37,14 @@ const GROQ_MODEL = env.GROQ_MODEL || "openai/gpt-oss-120b";
 const GRAPH = "https://graph.facebook.com/v22.0";
 
 const soloDigitos = (s) => String(s || "").replace(/\D/g, "");
-const COCINA = soloDigitos(env.MI_NUMERO_COCINA);
-const EQUIPO = [...new Set([COCINA, ...String(env.ADMINS || "").split(",").map(soloDigitos)].filter(Boolean))];
+// WhatsApp ya deja que algunas personas oculten su número: entonces llegan con un ID tipo "CO.1234567890" (BSUID)
+const esTelefono = (id) => /^\d{7,15}$/.test(String(id || ""));
+const idDe = (s) => {
+  const t = String(s || "").trim();
+  return /[a-z]/i.test(t) ? t : soloDigitos(t);
+};
+const COCINA = idDe(env.MI_NUMERO_COCINA);
+const EQUIPO = [...new Set([COCINA, ...String(env.ADMINS || "").split(",").map(idDe)].filter(Boolean))];
 
 const ENCARGADO = String(NEGOCIO.encargado || "").trim();
 // Identidad del negocio (menu.js)
@@ -409,10 +415,16 @@ const huella = (c) =>
 const authMeta = () => ({ Authorization: `Bearer ${WHATSAPP_TOKEN}` });
 
 async function enviar(to, payload) {
+  if (!to) {
+    console.error("No se envió: mensaje sin destinatario");
+    return { ok: false };
+  }
+  // Teléfono → "to". Número oculto (ID "CO.123…") → "recipient"
+  const destino = esTelefono(to) ? { to } : { recipient: to };
   try {
     const r = await axios.post(
       `${GRAPH}/${PHONE_ID}/messages`,
-      { messaging_product: "whatsapp", recipient_type: "individual", to, ...payload },
+      { messaging_product: "whatsapp", recipient_type: "individual", ...destino, ...payload },
       { headers: authMeta(), timeout: 15000 }
     );
     return { ok: true, id: r.data?.messages?.[0]?.id };
@@ -644,7 +656,7 @@ async function avisarEquipo(texto, destinos = EQUIPO) {
 }
 function manejarEstadoEntrega(st) {
   if (st?.status !== "failed") return;
-  console.error(`Mensaje a ${st.recipient_id} no entregado:`, JSON.stringify(st.errors?.[0] || {}));
+  console.error(`Mensaje a ${st.recipient_id || st.recipient_user_id} no entregado:`, JSON.stringify(st.errors?.[0] || {}));
   const info = avisosEnviados.get(st.id);
   if (info) {
     avisosEnviados.delete(st.id);
@@ -1189,12 +1201,15 @@ async function enviarResumen(c, pre = "") {
 }
 
 const mapa = (u) => `https://maps.google.com/?q=${u.lat},${u.lng}`;
+const enlaceCliente = (c) => (esTelefono(c.num) ? `wa.me/${c.num}` : `número oculto (respóndele por aquí: #${c.codigo} tu mensaje)`);
 const telLocal = (num) => (num.startsWith("57") && num.length === 12 ? `${num.slice(2, 5)} ${num.slice(5, 8)} ${num.slice(8)}` : num);
 
 // Tarjeta lista para reenviar al domiciliario
 function textoDomiciliario(p, c, actualizado = false) {
   let t = `🛵 DOMICILIO #${p.codigo}${actualizado ? " (ACTUALIZADO)" : ""} — ${MARCA}\n`;
-  t += `👤 ${c.nombre || "Cliente"} — ${telLocal(c.num)}\n💬 wa.me/${c.num}\n`;
+  t += esTelefono(c.num)
+    ? `👤 ${c.nombre || "Cliente"} — ${telLocal(c.num)}\n💬 wa.me/${c.num}\n`
+    : `👤 ${c.nombre || "Cliente"} — número oculto (el domiciliario no puede llamarlo: escríbele tú con #${c.pedido?.codigo || c.codigo} texto)\n`;
   t += `📍 ${p.barrio}${p.direccion ? " — " + p.direccion : ""}\n`;
   t += p.ubicacion ? `🗺️ ${mapa(p.ubicacion)}\n` : "🗺️ Sin ubicación GPS: si no encuentras, llama al cliente\n";
   if (p.pago === "nequi") t += `💜 Pago por Nequi (${pesos(p.total)}): confirma con cocina antes de entregar\n`;
@@ -1209,7 +1224,7 @@ function textoDomiciliario(p, c, actualizado = false) {
 
 function textoCocina(p, anterior, c) {
   const enc = anterior ? `✏️ CAMBIO EN PEDIDO #${p.codigo}` : `🔔 PEDIDO #${p.codigo} — ${MARCA}`;
-  let t = `${enc}\n👤 ${c.nombre || "Cliente"} — wa.me/${c.num}\n`;
+  let t = `${enc}\n👤 ${c.nombre || "Cliente"} — ${enlaceCliente(c)}\n`;
   t += p.entrega === "recoger" ? "🏪 RECOGE EN EL LOCAL\n" : `📍 ${p.barrio}${p.direccion ? " — " + p.direccion : ""}\n`;
   if (p.ubicacion) t += `🗺️ ${mapa(p.ubicacion)}\n`;
   t += p.items.map((i) => `• ${i.cantidad}x ${nombreItem(i)}`).join("\n") + "\n";
@@ -1388,7 +1403,7 @@ async function pasarAHumano(c, motivo, { tipo = "persona", mensaje, extra } = {}
     .map((h) => `  “${cortar(h.content, 200)}”`)
     .join("\n");
   const p = c.pedido || c.pedidoAnterior;
-  let aviso = `🙋 #${codigo} NECESITA UNA PERSONA\n👤 ${c.nombre || "Cliente"} — wa.me/${c.num}\nMotivo: ${motivo}\n`;
+  let aviso = `🙋 #${codigo} NECESITA UNA PERSONA\n👤 ${c.nombre || "Cliente"} — ${enlaceCliente(c)}\nMotivo: ${motivo}\n`;
   if (ultimos) aviso += `Últimos mensajes:\n${ultimos}\n`;
   if (p) aviso += `Pedido #${p.codigo}: ${p.lista} — ${pesos(p.total)} (${estadoLegible(p)}, hace ${minutosDesde(p.ts)} min)\n`;
   else if (c.carrito.length) aviso += `Lleva en el carrito: ${listaCarrito(c.carrito)}\n`;
@@ -1939,9 +1954,11 @@ function acumular(c, texto) {
   }, T.rafaga);
 }
 
-async function recibir(m, nombrePerfil) {
+async function recibir(m, nombrePerfil, contacto = null) {
   if (!m?.id || yaVisto(m.id)) return;
-  const num = m.from;
+  // Con número visible llega "from"; si la persona ocultó su número, llega solo "from_user_id" (ID tipo "CO.123…")
+  const num = m.from || contacto?.wa_id || m.from_user_id || contacto?.user_id;
+  if (!num) return console.warn("Mensaje sin remitente, ignorado");
   console.log(`Mensaje recibido de ${num} (${m.type})`);
   const esEquipo = EQUIPO.includes(num);
   if (esEquipo) encolar(`equipo:${num}`, () => reenviarPendientes(num));
@@ -2027,7 +2044,7 @@ async function manejarArchivo(c, m) {
   const codigo = codigoDe(c);
   const p = c.pedido;
   const esComprobante = (p?.pago || c.pago) === "nequi";
-  let caption = `📎 #${codigo} ${c.nombre || ""} (wa.me/${c.num}) envió ${tipo === "image" ? "una imagen" : "un archivo"}`;
+  let caption = `📎 #${codigo} ${c.nombre || ""} (${enlaceCliente(c)}) envió ${tipo === "image" ? "una imagen" : "un archivo"}`;
   if (esComprobante) caption += " — posible comprobante de Nequi";
   if (media.caption) caption += `: “${media.caption}”`;
   if (p) caption += `\nPedido #${p.codigo}: total ${pesos(p.total)}`;
@@ -2099,8 +2116,9 @@ app.post("/webhook", (req, res) => {
       const v = change.value || {};
       for (const st of v.statuses || []) manejarEstadoEntrega(st);
       for (const m of v.messages || []) {
-        const contacto = (v.contacts || []).find((x) => x.wa_id === m.from) || v.contacts?.[0];
-        recibir(m, contacto?.profile?.name).catch((e) => console.error("Error recibiendo:", e?.message || e));
+        const contacto =
+          (v.contacts || []).find((x) => (m.from && x.wa_id === m.from) || (m.from_user_id && x.user_id === m.from_user_id)) || v.contacts?.[0];
+        recibir(m, contacto?.profile?.name, contacto).catch((e) => console.error("Error recibiendo:", e?.message || e));
       }
     }
   }
