@@ -115,6 +115,17 @@ export const NEGOCIO = {
   reglasProductos: `- Si dice "salchipapa" o "salchipapas" sin decir cuál, no adivines: pregunta si la quiere sencilla, de lomo o de chorizo, y pon falta_aclarar = true.
 - "salchi" o "salchipapita" = salchipapa.`,
 
+  // Al elegir de la lista: false = se anota 1 de una y se pregunta "¿Algo más?" · true = primero pregunta cuántos
+  preguntarCuantosEnLista: false,
+
+  // Cuando el cliente pide "una salchipapa" sin decir cuál, el bot pregunta con botones (máximo 3 productos).
+  // palabras: cómo la gente nombra el producto sin decir el tipo (en minúscula y sin tildes)
+  preguntarTipo: {
+    palabras: ["salchipapa", "salchipapas", "salchi", "salchis", "salchipapita", "salchipapitas"],
+    productos: ["salchipapa_sencilla", "salchipapa_lomo", "salchipapa_chorizo"],
+    pregunta: "¿Cuál salchipapa quieres? 👇",
+  },
+
   // Quién atiende cuando el bot pasa la conversación a una persona (aparece en los mensajes al cliente)
   encargado: "Sergio",
 
@@ -157,4 +168,43 @@ export const NEGOCIO = {
   minutosParaCambios: 10,
   minutosEsperaPersona: 5,
   minutosAlertaPedido: 45,
+};
+
+/**
+ * ============================================================
+ *  MEMES 🐱
+ *  Las imágenes van en la carpeta "memes" del repositorio (al lado de este archivo).
+ *  Aquí dices cuál va en cada momento. Si un momento tiene varias, se turnan.
+ *  Para cambiar uno: sube la imagen nueva a la carpeta y cambia el nombre aquí.
+ *  Para quitar un momento: deja su lista vacía [].
+ *  El bot NUNCA manda memes en quejas, demoras, cuando el cliente está molesto
+ *  o cuando lo está atendiendo una persona.
+ * ============================================================
+ */
+export const MEMES = {
+  activo: true, // false = el bot no manda ningún meme
+  probabilidad: 0.5, // 0.5 = la mitad de las veces · 1 = siempre · 0.3 = de vez en cuando
+  maximoPorPedido: 3, // máximo de memes en una misma conversación (para que no canse)
+  siempre: ["sticker"], // momentos en los que el meme sale siempre (no cuentan en el máximo)
+  horaNoche: "21", // desde esta hora (formato 24 h) se usa "entregado_noche" en vez de "entregado"
+
+  momentos: {
+    saludo: ["saludo.jpg", "mesada.jpg"], // cliente nuevo saluda (va con el menú)
+    cliente_que_vuelve: ["cliente_que_vuelve.jpg"], // saluda alguien que ya había pedido
+    aclarar: ["aclarar.jpg"], // pidió "una salchi" sin decir cuál
+    compartir: ["compartir.jpg"], // pidió una sola salchipapa (en el "¿Algo más?")
+    bebida: ["bebida.jpg"], // se le ofrece bebida
+    cambio: ["cambio.jpg"], // paga con billete de $100.000 o más
+    confirmado: ["confirmado.jpg", "confirmado_2.jpg"], // confirmó el pedido
+    sin_confirmar: ["sin_confirmar.jpg"], // no confirmó el resumen en 10 minutos
+    nequi: ["nequi.jpg"], // mandó el comprobante de Nequi
+    salio: ["salio.jpg", "salio_2.jpg"], // /salio desde cocina
+    entregado: ["entregado.jpg"], // /entregado de día
+    entregado_noche: ["entregado_noche.jpg"], // /entregado de noche
+    gracias: ["gracias.jpg", "gracias_2.jpg", "gracias_3.jpg"], // el cliente da las gracias
+    agotado: ["agotado.jpg"], // pidió algo que se acabó hoy
+    cancelado: ["cancelado.jpg"], // el CLIENTE canceló (si cancela cocina, no va meme)
+    cerrado: ["cerrado.jpg"], // escribe cuando está cerrado
+    sticker: ["sticker_cliente.jpg"], // el cliente manda un sticker (sin pedido en curso)
+  },
 };
