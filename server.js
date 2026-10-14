@@ -397,6 +397,8 @@ function reiniciarSiHaceFalta(c) {
     memeCambio: false,
     memesPedido: 0,
     cantidadPendiente: null,
+    productoPendiente: null,
+    vecesPago: 0,
     pidioTelefono: false,
     pidioUbicacion: false,
     estado: "armando",
@@ -519,6 +521,7 @@ const memesFaltantes = Object.values(MEMES.momentos || {})
   .flat()
   .filter((f) => !memesEnCarpeta.has(f));
 
+const memesVistosPorCliente = new Map();
 // Manda un meme del momento (si toca). Nunca rompe el flujo: si falla, sigue como si nada.
 async function enviarMeme(c, momento) {
   try {
@@ -529,7 +532,9 @@ async function enviarMeme(c, momento) {
     if (!MEMES_SIEMPRE.has(momento) && Math.random() >= PROB_MEME) return false;
     if (ahora() - (c.ultimoMeme || 0) < 15 * 1000) return false; // máximo uno por turno
     if (!MEMES_SIEMPRE.has(momento) && (c.memesPedido || 0) >= MAX_MEMES) return false; // ya van suficientes en este pedido
-    c.memesVistos = c.memesVistos || [];
+    // Memes que ya vio este cliente (se guardan aparte para recordarlos entre pedidos, aunque pasen días)
+    if (!memesVistosPorCliente.has(c.num)) memesVistosPorCliente.set(c.num, []);
+    c.memesVistos = memesVistosPorCliente.get(c.num);
     const nuevos = lista.filter((f) => !c.memesVistos.includes(f));
     const opciones = nuevos.length ? nuevos : lista;
     const archivo = opciones[Math.floor(Math.random() * opciones.length)];
@@ -538,7 +543,8 @@ async function enviarMeme(c, momento) {
       c.ultimoMeme = ahora();
       c.memesPedido = (c.memesPedido || 0) + 1;
       c.memesVistos.push(archivo);
-      if (c.memesVistos.length > 40) c.memesVistos.shift();
+      if (c.memesVistos.length > 60) c.memesVistos.shift();
+      if (memesVistosPorCliente.size > 5000) memesVistosPorCliente.delete(memesVistosPorCliente.keys().next().value);
     }
     return r.ok;
   } catch {
@@ -865,7 +871,7 @@ CAMPOS DEL JSON:
 - falta_aclarar: true solo si tu respuesta pregunta algo sobre los productos (cuál, cuántos o qué sabor).
 - entrega: "recoger" si dice que pasa a recoger; "domicilio" si lo pide a domicilio; si no lo dice, "".
 - barrio, direccion, nombre: lo que el cliente diga en ESTE mensaje; si no lo dice, "". La dirección es calle o carrera, número, casa o apto y referencias, sin el barrio.
-- pago: "efectivo" o "nequi" si lo dice; si no, "".
+- pago: "efectivo" o "nequi" si lo dice; si no, "". "Transferencia", "transfiero", "consignación", "Bre-B", "llave" o "neki" = "nequi".
 - paga_con: con cuánto paga en efectivo, en pesos ("con 50", "billete de 50" = 50000; "exacto" = 0). Si no lo dice, null.
 - salsas: qué salsas incluidas quiere, si lo dice (ej: "ají picante", "sin ají"); si no, "".
 - notas: indicaciones generales del pedido (ej: "llamar al llegar", "timbre dañado"); si no, "".
@@ -1036,7 +1042,7 @@ const RECORDATORIO_PASO = {
 };
 
 // ---------- "Una salchi" sin decir cuál: preguntar con botones ----------
-const NUM_PALABRA = { un: 1, una: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10 };
+const NUM_PALABRA = { un: 1, una: 1, uno: 1, otra: 1, otro: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10 };
 const conPalabraTipo = (n) => PALABRAS_TIPO.some((w) => new RegExp(`(^|[^a-zñ])${w}([^a-zñ]|$)`).test(n));
 function pideSinTipo(texto) {
   if (!TIPOS.length) return false;
@@ -1275,6 +1281,17 @@ async function siguientePaso(c, r, avisos = []) {
         );
       }
       return pregunta(c, "pago", `${pre}El pago es en efectivo al recibir 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
+    }
+    // No quedó claro cómo paga: con Nequi, se le vuelven a mostrar los botones (una vez más) en vez de suponer efectivo
+    if (NEQUI && (c.vecesPago || 0) < 1) {
+      c.vecesPago = (c.vecesPago || 0) + 1;
+      c.paso = "pago";
+      const texto = `${pre}¿Me confirmas cómo pagas? 👇`;
+      recordar(c, "assistant", texto);
+      return enviarBotones(c.num, texto, [
+        ["pago_nequi", "💜 Nequi"],
+        ["pago_efectivo", "💵 Efectivo"],
+      ], "Escríbeme *Nequi* o *efectivo*");
     }
     c.pago = "efectivo";
   }
@@ -1653,6 +1670,22 @@ async function procesarTurno(c, entrada) {
       await memeAntes(c, "agotado");
       return responder(c, `Uy, hoy se nos acabó ${PRODUCTOS[id].nombre} 😔 ¿Te provoca otra cosa?`);
     }
+    // Mensajes cortos: "¿Cuántas?" con botones 1 · 2 · 3 (o escribe el número)
+    if (!c.cantidadPendiente && CORTO && NEGOCIO.preguntarCuantosEnLista !== false) {
+      const p = PRODUCTOS[id];
+      const cuantos = /a$/i.test(String(p.nombre).split(/\s+/)[0]) ? "cuántas" : "cuántos";
+      c.productoPendiente = id;
+      c.paso = "cantidad";
+      c.pasoVeces = 1;
+      if (c.estado === "esperando_confirmacion") c.estado = "armando";
+      if (!esBebida(id) && !c.carrito.some((i) => !esBebida(i.id)) && !c.ofrecioCompartir) {
+        c.ofrecioCompartir = true;
+        await memeAntes(c, "compartir"); // "Cuando piden una sola salchi para compartir" justo antes de preguntar cuántas
+      }
+      const texto = `${p.corto || p.nombre}: ¿${cuantos}? 👇\n(si son más, escríbeme el número)`;
+      recordar(c, "assistant", texto);
+      return enviarBotones(c.num, texto, [1, 2, 3].map((n) => [`cant:${id}:${n}`, String(n)]), "");
+    }
     // Negocios de "por docena" (pasteles, empanadas) prefieren preguntar cuántos; en menu.js: preguntarCuantosEnLista
     if (!c.cantidadPendiente && NEGOCIO.preguntarCuantosEnLista !== false) {
       const p = PRODUCTOS[id];
@@ -1748,6 +1781,11 @@ async function procesarTurno(c, entrada) {
     }
   }
 
+  // Pago escrito con palabras ("nequi", "neki", "transferencia", "efectivo") = como tocar el botón
+  if (NEQUI && !entrada.boton && c.paso === "pago" && !c.pago && c.carrito.length && texto && n.split(" ").length <= 6 && !/\d/.test(n)) {
+    if (/nequi|neki|nequy|nekii|transfer|transf|consign|bre ?b|llave/.test(n)) entrada.boton = "pago_nequi";
+    else if (/efectivo|efectibo|cash|en plata|contra ?entrega|en billete|billete|al recibir/.test(n)) entrada.boton = "pago_efectivo";
+  }
   // Botones de pago
   if (entrada.boton === "pago_nequi" && c.carrito.length && NEQUI) {
     c.pago = "nequi";
@@ -1761,6 +1799,27 @@ async function procesarTurno(c, entrada) {
     return pregunta(c, "pago", `¡Listo! 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
   }
 
+  // Cantidad: botón 1·2·3 o número escrito cuando se le preguntó "¿cuántas?"
+  if (c.paso === "cantidad" && c.productoPendiente) {
+    let cantidad = null;
+    const b = String(entrada.boton || "");
+    if (b.startsWith("cant:")) {
+      const [, pid, nTxt] = b.split(":");
+      if (pid === c.productoPendiente) cantidad = Number(nTxt);
+    } else if (texto) {
+      const t1 = n.replace(/[^a-z0-9ñ ]/g, " ").trim();
+      const m1 = t1.match(/^(\d{1,2})\b/) || t1.match(new RegExp(`^(${Object.keys(NUM_PALABRA).join("|")})\\b`));
+      if (m1 && t1.split(/\s+/).length <= 4) cantidad = /^\d+$/.test(m1[1]) ? Number(m1[1]) : NUM_PALABRA[m1[1]];
+    }
+    if (cantidad > 0 && cantidad <= 50) {
+      c.cantidadPendiente = cantidad;
+      const id = c.productoPendiente;
+      c.productoPendiente = null;
+      return procesarTurno(c, { producto: id, texto: "", yaRecordado: true });
+    }
+    if (b.startsWith("cant:")) return; // botón viejo de otro producto: se ignora
+    c.productoPendiente = null; // escribió otra cosa: que la IA lo entienda
+  }
   // Eligió un sabor de la lista (op:producto:número)
   if (String(entrada.boton || "").startsWith("op:") && c.carrito.length) {
     const [, pid, idx] = entrada.boton.split(":");
@@ -2324,7 +2383,7 @@ async function responderSticker(c) {
   const enCurso = c.carrito.length || c.estado !== "armando" || (c.pedido && ["recibido", "en_camino"].includes(c.pedido.estado));
   if (enCurso) return;
   c.ultimaActividad = ahora();
-  const yaLosVio = memesDe("sticker").every((f) => (c.memesVistos || []).includes(f));
+  const yaLosVio = memesDe("sticker").every((f) => (memesVistosPorCliente.get(c.num) || []).includes(f));
   const conMeme = !yaLosVio && (await memeAntes(c, "sticker"));
   if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) return enviarMenu(c, conMeme ? "Mientras tanto, mira lo que tenemos 😋" : `¡Hola! 👋 Mira lo que tenemos hoy en ${MARCA} ${EMOJI}`);
   if (conMeme) {
