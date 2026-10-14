@@ -109,6 +109,7 @@ export const SALSAS = {
 
 export const NEGOCIO = {
   // ---------- IDENTIDAD (cómo se presenta el bot) ----------
+  resumenBebidas: "Gaseosa, agua, jugo Hit o té frío", // cómo se nombran las bebidas al ofrecerlas (corto)
   mensajesCortos: true, // true = saludo, menú y respuestas cortos (la gente lee la notificación sin abrir el chat)
   marca: "Pedidito", // nombre del negocio que dice el bot. Cámbialo por la marca de las salchipapas si tienen una.
   emoji: "🍟",
@@ -127,6 +128,7 @@ export const NEGOCIO = {
     palabras: ["salchipapa", "salchipapas", "salchi", "salchis", "salchipapita", "salchipapitas"],
     productos: ["salchipapa_sencilla", "salchipapa_lomo", "salchipapa_chorizo"],
     pregunta: "¿Cuál salchipapa quieres? 👇",
+    botonOtra: "🍟 Otra salchi", // botón en "¿Algo más?" (máximo 20 letras)
   },
 
   // Quién atiende cuando el bot pasa la conversación a una persona (aparece en los mensajes al cliente)
