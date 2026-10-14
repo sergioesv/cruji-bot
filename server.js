@@ -675,15 +675,32 @@ async function preguntarAlgoMas(c, pre = "") {
   c.paso = "mas";
   c.pasoVeces = 0;
   recordar(c, "assistant", texto);
-  return enviarBotones(
-    c.num,
-    texto,
-    [
-      ["mas_fin", "✅ Eso es todo"],
-      ["mas_agregar", "➕ Agregar algo"],
-    ],
-    "Escríbeme qué más quieres, o dime *no, gracias* y seguimos 😊"
-  );
+  // Botones directos: [Eso es todo] [Otra salchi] [Bebida]. Sin tipos/bebidas configurados: [Agregar algo]
+  const hayTipos = TIPOS.some((id) => !agotados.has(id));
+  const hayBebidas = IDS.some((id) => esBebida(id) && !agotados.has(id));
+  const botones = [["mas_fin", "✅ Eso es todo"]];
+  if (hayTipos) botones.push(["mas_otra", cortar(String(PT.botonOtra || "➕ Otra"), 20)]);
+  if (hayBebidas) botones.push(["mas_bebida", "🥤 Bebida"]);
+  if (botones.length < 3 && !(hayTipos && hayBebidas)) botones.push(["mas_agregar", "➕ Agregar algo"]);
+  return enviarBotones(c.num, texto, botones.slice(0, 3), "Escríbeme qué más quieres, o dime *no, gracias* y seguimos 😊");
+}
+
+// Oferta de bebida: lista con "No, gracias" de primera y el texto diciendo qué hay
+const RESUMEN_BEBIDAS = String(NEGOCIO.resumenBebidas || "").trim();
+function nombresBebidas() {
+  if (RESUMEN_BEBIDAS) return RESUMEN_BEBIDAS;
+  const n = IDS.filter((id) => esBebida(id) && !agotados.has(id)).map((id) => minuscula(PRODUCTOS[id].corto || PRODUCTOS[id].nombre));
+  return n.length <= 1 ? n.join("") : `${n.slice(0, -1).join(", ")} o ${n.at(-1)}`;
+}
+async function ofrecerBebida(c, pre = "") {
+  c.ofrecioBebida = true;
+  c.paso = "bebida";
+  c.pasoVeces = 0;
+  const texto = CORTO ? `${pre}¿Algo de tomar? 🥤 ${nombresBebidas()} 👇` : `${pre}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombresBebidas()}.\nSi no, dime *no, gracias* y seguimos 😊`;
+  recordar(c, "assistant", texto);
+  const r = await enviarListaBebidas(c, texto);
+  if (r.ok) return r;
+  return pregunta(c, "bebida", `${pre}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombresBebidas()}. Si no, dime *no, gracias* 😊`);
 }
 
 // ---------- Avisos al equipo (con reintento si WhatsApp no los entrega) ----------
@@ -1077,7 +1094,7 @@ function tituloTipo(id) {
   const t = w.join(" ");
   return cortar(`${t.charAt(0).toUpperCase() + t.slice(1)} ${pesos(PRODUCTOS[id].precio)}`, 20);
 }
-async function preguntarTipo(c, pre = "", cantidad = null) {
+async function preguntarTipo(c, pre = "", cantidad = null, { conMeme = true } = {}) {
   const disponibles = TIPOS.filter((id) => !agotados.has(id));
   if (!disponibles.length) return false;
   if (c.paso === "tipo") c.pasoVeces++;
@@ -1087,7 +1104,7 @@ async function preguntarTipo(c, pre = "", cantidad = null) {
   }
   if (c.pasoVeces >= 3) return false; // ya se le preguntó: que la IA le explique con sus palabras
   c.cantidadPendiente = cantidad;
-  await memeAntes(c, "aclarar");
+  if (conMeme) await memeAntes(c, "aclarar");
   const texto = `${pre}${PREGUNTA_TIPO}`;
   recordar(c, "assistant", texto);
   await enviarBotones(
@@ -1206,23 +1223,8 @@ async function siguientePaso(c, r, avisos = []) {
     const bebidas = IDS.filter((id) => esBebida(id) && !agotados.has(id));
     const yaTiene = c.carrito.some((i) => esBebida(i.id) || PRODUCTOS[i.id].incluyeBebida);
     if (bebidas.length && !yaTiene) {
-      const nombres = bebidas
-        .map((id) => {
-          const n = PRODUCTOS[id].corto || PRODUCTOS[id].nombre;
-          return n.charAt(0).toLowerCase() + n.slice(1);
-        })
-        .join(", ");
       await memeAntes(c, "bebida");
-      const textoBebida = CORTO
-        ? `${pre}${ecoUnaVez(c, pre, lista)}¿Algo de tomar? 🥤`
-        : `${pre}${ecoUnaVez(c, pre, lista)}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombres}.\nSi no, dime *no, gracias* y seguimos 😊`;
-      c.paso = "bebida";
-      c.pasoVeces = 0;
-      recordar(c, "assistant", textoBebida);
-      const rBebida = await enviarListaBebidas(c, textoBebida);
-      if (rBebida.ok) return rBebida;
-      // si la lista no se pudo enviar, queda la pregunta de texto (con los nombres)
-      return pregunta(c, "bebida", `${pre}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombres}. Si no, dime *no, gracias* 😊`);
+      return ofrecerBebida(c, `${pre}${ecoUnaVez(c, pre, lista)}`);
     }
   }
 
@@ -1755,6 +1757,15 @@ async function procesarTurno(c, entrada) {
   }
 
   // "¿Algo más?": botones o "no, gracias / eso es todo" siguen con el pedido sin gastar modelo
+  if (entrada.boton === "mas_otra" && c.estado !== "confirmado") {
+    if (c.estado === "esperando_confirmacion") c.estado = "armando";
+    if (await preguntarTipo(c, "", null, { conMeme: false })) return;
+    return enviarMenu(c, "Esto es lo que tenemos 😋");
+  }
+  if (entrada.boton === "mas_bebida" && c.estado !== "confirmado") {
+    if (c.estado === "esperando_confirmacion") c.estado = "armando";
+    return ofrecerBebida(c);
+  }
   if (entrada.boton === "mas_agregar") {
     c.paso = "mas";
     const r = await enviarLista(c, "Elige lo que quieras agregar 👇 (o escríbemelo)", "➕ Agregar algo");
