@@ -53,6 +53,7 @@ const EMOJI = String(NEGOCIO.emoji || "😋").trim();
 const LEMA = String(NEGOCIO.lema || "").trim();
 const DESCRIPCION_NEGOCIO = String(NEGOCIO.descripcion || "un negocio de comida a domicilio").trim();
 const EJEMPLO_PEDIDO = String(NEGOCIO.ejemploPedido || "").trim();
+const RESUMEN_BEBIDAS_MENU = String(NEGOCIO.resumenBebidas || "").trim();
 const REGLAS_PRODUCTOS = String(NEGOCIO.reglasProductos || "").trim();
 const CON_QUIEN = ENCARGADO ? `con ${ENCARGADO}` : "con alguien del equipo";
 const A_QUIEN = ENCARGADO ? `a ${ENCARGADO}` : "al equipo";
@@ -263,7 +264,7 @@ function menuTexto() {
       if (disponibles.length) {
         const desde = Math.min(...disponibles.map((id) => PRODUCTOS[id].precio));
         alFinal.push(
-          CORTO ? `🥤 Bebidas desde ${pesos(desde)}` : `🥤 Bebidas: ${disponibles.map((id) => minuscula(PRODUCTOS[id].corto || PRODUCTOS[id].nombre)).join(", ")} (desde ${pesos(desde)})`
+          CORTO ? `🥤 Bebidas desde ${pesos(desde)}${RESUMEN_BEBIDAS_MENU ? ` (${minuscula(RESUMEN_BEBIDAS_MENU)})` : ""}` : `🥤 Bebidas: ${disponibles.map((id) => minuscula(PRODUCTOS[id].corto || PRODUCTOS[id].nombre)).join(", ")} (desde ${pesos(desde)})`
         );
       }
       continue;
@@ -272,13 +273,15 @@ function menuTexto() {
       if (disponibles.length) salsaExtra = Math.min(...disponibles.map((id) => PRODUCTOS[id].precio));
       continue;
     }
+    const emojiCat = (String(cat).match(/\p{Extended_Pictographic}/u) || [""])[0];
+    const vineta = CORTO && emojiCat ? emojiCat : "•";
     const lineas = ids.map((id) => {
       const p = PRODUCTOS[id];
       const nombre = p.corto || p.nombre;
-      if (agotados.has(id)) return `• ${nombre}: agotado hoy 😔`;
-      return `• ${nombre} — ${pesos(p.precio)}${p.descripcion ? `\n   _${p.descripcion}_` : ""}`;
+      if (agotados.has(id)) return `${vineta} ${nombre}: agotado hoy 😔`;
+      return `${vineta} ${nombre} — ${pesos(p.precio)}${p.descripcion ? `\n   _${p.descripcion}_` : ""}`;
     });
-    principales.push(`*${cat}*\n${lineas.join("\n")}`);
+    principales.push(CORTO ? lineas.join("\n") : `*${cat}*\n${lineas.join("\n")}`);
   }
   if (SALSAS.incluidas?.length && SALSAS_EN_MENU) {
     const sal = SALSAS.incluidas.map(minuscula);
@@ -1109,7 +1112,7 @@ async function saludar(c) {
   }
   if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) {
     await memeAntes(c, c.pedidoAnterior ? "cliente_que_vuelve" : "saludo", PAUSA_SALUDO); // la pausa solo si salió meme
-    return enviarMenu(c, CORTO ? `${hola} Estás en ${MARCA} ${EMOJI}` : `${hola} Te damos la bienvenida a ${MARCA} ${EMOJI}${LEMA ? " " + LEMA : ""}`);
+    return enviarMenu(c, CORTO ? `${hola} Hoy tenemos:` : `${hola} Te damos la bienvenida a ${MARCA} ${EMOJI}${LEMA ? " " + LEMA : ""}`);
   }
   return responder(c, `${hola} ¿Qué se te antoja hoy? 😊 (Si quieres ver el menú otra vez, escribe *menú*)`);
 }
