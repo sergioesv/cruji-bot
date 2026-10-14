@@ -263,6 +263,33 @@ function ejemploCantidad(p) {
   const plural = minuscula([formaPlural(partes[0]), resto].filter(Boolean).join(" "));
   return `1 ${singular}, 2 ${plural}...`;
 }
+// Pluraliza también lo que sigue al nombre, SOLO para las salchipapas (que es donde se sabe que
+// "sencilla" es un adjetivo que concuerda). En lo demás ("Jugo Hit", "Gaseosa personal") no se toca,
+// para no pluralizar por error una marca o un tamaño.
+function formaPluralFrase(resto) {
+  if (!resto) return resto;
+  const palabras = resto.split(/\s+/);
+  if (/^(de|del|con|sin)$/i.test(palabras[0])) return resto; // "de lomo" no cambia
+  const ultima = palabras.pop();
+  return [...palabras, formaPlural(ultima)].join(" ");
+}
+const mayuscula = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+// Para las salchipapas usa la palabra corta que ya usas en el chat ("salchi"), si está configurada
+function palabraBase(p, id) {
+  if (TIPOS.includes(id) && PT.palabras?.length) {
+    const cortas = PT.palabras.map(String).filter((w) => !/s$/i.test(w));
+    if (cortas.length) return cortas.reduce((a, b) => (b.length < a.length ? b : a));
+  }
+  return String(p.corto || p.nombre).split(/\s+/)[0];
+}
+// Texto del botón: "1 Salchi de lomo", "2 Salchis de lomo"... (máximo 20 letras, que es lo que deja WhatsApp)
+function tituloCantidadBoton(p, id, n) {
+  const partes = String(p.corto || p.nombre).split(/\s+/);
+  const resto = TIPOS.includes(id) ? (n === 1 ? partes.slice(1).join(" ") : formaPluralFrase(partes.slice(1).join(" "))) : partes.slice(1).join(" ");
+  const base = palabraBase(p, id);
+  const baseForma = n === 1 ? base : formaPlural(base);
+  return cortar(`${n} ${[mayuscula(baseForma), resto].filter(Boolean).join(" ")}`, 20);
+}
 const esCategoria = (cat, palabra) => norm(cat).includes(palabra);
 
 function menuTexto() {
@@ -1806,9 +1833,9 @@ async function procesarTurno(c, entrada) {
         c.ofrecioCompartir = true;
         await memeAntes(c, "compartir"); // "Cuando piden una sola salchi para compartir" justo antes de preguntar cuántas
       }
-      const texto = `${p.corto || p.nombre}: ¿${cuantos}? 👇\n(${ejemploCantidad(p)} si son más, escríbeme el número)`;
+      const texto = `${p.corto || p.nombre}: ¿${cuantos}? 👇\n(si son más, escríbeme el número)`;
       recordar(c, "assistant", texto);
-      return enviarBotones(c.num, texto, [1, 2, 3].map((n) => [`cant:${id}:${n}`, String(n)]), "");
+      return enviarBotones(c.num, texto, [1, 2, 3].map((n) => [`cant:${id}:${n}`, tituloCantidadBoton(p, id, n)]), "");
     }
     // Negocios de "por docena" (pasteles, empanadas) prefieren preguntar cuántos; en menu.js: preguntarCuantosEnLista
     if (!c.cantidadPendiente && NEGOCIO.preguntarCuantosEnLista !== false) {
