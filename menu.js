@@ -118,8 +118,8 @@ export const NEGOCIO = {
   reglasProductos: `- Si dice "salchipapa" o "salchipapas" sin decir cuál, no adivines: pregunta si la quiere sencilla, de lomo o de chorizo, y pon falta_aclarar = true.
 - "salchi" o "salchipapita" = salchipapa.`,
 
-  // Al elegir de la lista: false = se anota 1 de una y se pregunta "¿Algo más?" · true = primero pregunta cuántos
-  preguntarCuantosEnLista: false,
+  // Al elegir de la lista: true = pregunta "¿cuántas?" con botones 1 · 2 · 3 · false = anota 1 y sigue
+  preguntarCuantosEnLista: true,
 
   // Cuando el cliente pide "una salchipapa" sin decir cuál, el bot pregunta con botones (máximo 3 productos).
   // palabras: cómo la gente nombra el producto sin decir el tipo (en minúscula y sin tildes)
@@ -188,9 +188,9 @@ export const NEGOCIO = {
 export const MEMES = {
   activo: true, // false = el bot no manda ningún meme
   probabilidad: 0.5, // 0.5 = la mitad de las veces · 1 = siempre · 0.3 = de vez en cuando
-  maximoPorPedido: 3,
+  maximoPorPedido: 3, // máximo de memes en una misma conversación (para que no canse)
   pausaSaludoSegundos: 5, // después del meme del saludo, espera esto antes de mandar el menú (solo si salió meme)
-  pausaSegundos: 2.5, // la misma pausa en los demás momentos (corta, para no demorar el pedido) // máximo de memes en una misma conversación (para que no canse)
+  pausaSegundos: 2.5, // la misma pausa en los demás momentos (corta, para no demorar el pedido)
   siempre: ["sticker", "confirmado"], // momentos en los que el meme sale siempre (no cuentan en el máximo)
   horaNoche: "21", // desde esta hora (formato 24 h) se usa "entregado_noche" en vez de "entregado"
 
