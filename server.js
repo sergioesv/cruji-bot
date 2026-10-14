@@ -175,6 +175,33 @@ const nombreItem = (i) => `${PRODUCTOS[i.id].nombre}${i.nota ? ` (${i.nota})` : 
 const listaCarrito = (carrito) => carrito.map((i) => `${i.cantidad}x ${nombreItem(i)}`).join(", ");
 const unidades = (carrito) => carrito.reduce((s, i) => s + i.cantidad, 0);
 
+// Red de seguridad: si el cliente nombró una bebida y el modelo se la dejó por fuera, el código la agrega
+// (el modelo solo interpreta; lo que se pidió lo garantiza el código). No aplica si la niega ("sin gaseosa").
+function bebidaOlvidada(texto, lista) {
+  const t = norm(texto);
+  if (!t) return null;
+  const NUM = { un: 1, una: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6 };
+  if ((lista || []).some((p) => esBebida(p?.id))) return null; // ya hay una bebida: el modelo la entendió (evita confundir "coca grande")
+  let mejor = null;
+  for (const id of IDS) {
+    if (!esBebida(id) || agotados.has(id)) continue;
+    const p = PRODUCTOS[id];
+    for (const cand of [p.nombre, p.corto, ...(p.alias || [])]) {
+      const n = norm(cand);
+      if (!n || n.length < 4) continue;
+      const i = t.indexOf(n);
+      if (i < 0 || (mejor && n.length <= mejor.largo)) continue;
+      const antes = t.slice(Math.max(0, i - 25), i);
+      if (/\b(sin|no quiero|no)\s+(\w+\s+){0,2}$/.test(antes) || /\b(quita|quitar|quitale|cancela)\b/.test(antes)) continue;
+      const m = antes.match(/(\d+|un|una|uno|dos|tres|cuatro|cinco|seis)\s+(?:de\s+|la\s+|las\s+)?$/);
+      const cantidad = m ? (/^\d+$/.test(m[1]) ? Number(m[1]) : NUM[m[1]]) : 1;
+      const nota = (p.opciones || []).find((o) => t.includes(norm(o))) || "";
+      mejor = { id, cantidad: cantidad > 0 && cantidad <= 20 ? cantidad : 1, nota, largo: n.length };
+    }
+  }
+  return mejor ? { id: mejor.id, cantidad: mejor.cantidad, nota: mejor.nota } : null;
+}
+
 // ---------- Domicilio dinámico ----------
 // Distancia en km por calles (aprox.): línea recta × 1.3
 function kmPorCalles(u) {
@@ -376,13 +403,46 @@ function recordar(c, role, content) {
   while (c.historial.length > 14) c.historial.shift();
 }
 
+function guardarPedidoPrevio(c) {
+  c.pedidoAnterior = c.pedido;
+  c.pedidosPrevios = [c.pedido, ...(c.pedidosPrevios || []).filter((p) => p !== c.pedido)].slice(0, 5);
+}
+// Empezar un pedido nuevo (el anterior sigue su curso en cocina y se puede manejar con su número)
+function empezarPedidoNuevo(c) {
+  if (c.pedido) guardarPedidoPrevio(c);
+  Object.assign(c, {
+    carrito: [],
+    entrega: "domicilio",
+    pago: "",
+    pagaCon: null,
+    salsas: "",
+    notas: "",
+    preguntoPago: false,
+    ofrecioBebida: false,
+    ofrecioCompartir: false,
+    memeCambio: false,
+    memesPedido: 0,
+    cantidadPendiente: null,
+    productoPendiente: null,
+    pidioTelefono: false,
+    pidioUbicacion: false,
+    estado: "armando",
+    recordoConfirmacion: false,
+    pedido: null,
+    fallos: 0,
+    paso: "",
+    pasoVeces: 0,
+    ronda: (c.ronda || 0) + 1,
+  });
+}
 function reiniciarSiHaceFalta(c) {
   const t = ahora();
   const inactivo = t - c.ultimaActividad > T.reinicio;
   const terminado = c.pedido && ["entregado", "cancelado"].includes(c.pedido.estado);
   const viejo = c.pedido && t - c.pedido.ts > T.reinicio;
   if (!inactivo && !terminado && !viejo) return;
-  if (c.pedido) c.pedidoAnterior = c.pedido;
+  if (c.pedido) guardarPedidoPrevio(c);
+  c.ronda = (c.ronda || 0) + 1;
   Object.assign(c, {
     historial: [],
     carrito: [],
@@ -429,6 +489,8 @@ const huella = (c) =>
 // ======================= WHATSAPP =======================
 const authMeta = () => ({ Authorization: `Bearer ${WHATSAPP_TOKEN}` });
 
+// Botones viejos: cada pedido es una "ronda". Si el cliente toca un botón de una ronda anterior, no se mezcla con lo de ahora
+const rondaDeMensaje = new Map(); // id del mensaje con botones -> ronda del cliente cuando se envió
 async function enviar(to, payload) {
   if (!to) {
     console.error("No se envió: mensaje sin destinatario");
@@ -442,7 +504,12 @@ async function enviar(to, payload) {
       { messaging_product: "whatsapp", recipient_type: "individual", ...destino, ...payload },
       { headers: authMeta(), timeout: 15000 }
     );
-    return { ok: true, id: r.data?.messages?.[0]?.id };
+    const id = r.data?.messages?.[0]?.id;
+    if (id && payload.type === "interactive" && !EQUIPO.includes(to)) {
+      rondaDeMensaje.set(id, clientes.get(to)?.ronda || 0);
+      if (rondaDeMensaje.size > 20000) rondaDeMensaje.delete(rondaDeMensaje.keys().next().value);
+    }
+    return { ok: true, id };
   } catch (e) {
     const err = e.response?.data?.error;
     console.error(`Error enviando a ${to}:`, JSON.stringify(err || e.message));
@@ -876,6 +943,7 @@ ${REGLAS_PRODUCTOS ? REGLAS_PRODUCTOS + "\n" : ""}- Si no dice la cantidad, preg
 - Si el producto tiene opciones, pon la elegida en "nota" (ej: "Coca-Cola"). Varias opciones del mismo producto = una línea por opción (2 de Coca-Cola y 1 de manzana = dos líneas).
 - "nota" también sirve para indicaciones de ese producto (ej: "bien doraditas"). Si no hay, "".
 - NUNCA repitas un producto en la lista: cada producto (con su nota) va UNA sola vez con la cantidad TOTAL (si tenía 5 de un producto y no las cambia, siguen siendo 5).
+- Si dice "una, y otra" o "me da una y me da una" sin repetir el producto, son DOS del último producto nombrado (cantidad 2, en UNA sola línea). Nunca ignores un producto que el cliente nombró (bebidas incluidas): si dudas de algo, anota lo claro y pregunta solo por lo dudoso.
 - Si pide algo que no vendemos, dilo con amabilidad y ofrece lo que hay.
 - En Colombia "una gaseosa de 2000" o "una de tres mil" habla del PRECIO, no del tamaño: ofrécele la opción más parecida diciendo su precio de la lista (ej: "¿Te sirve la gaseosa personal de $3.500?") y pon falta_aclarar = true.
 
@@ -1171,7 +1239,10 @@ async function siguientePaso(c, r, avisos = []) {
     if (r?.mostrar_menu || !r?.respuesta) return enviarMenu(c, r?.respuesta || "¿Qué se te antoja? 😊");
     return pregunta(c, "productos", r.respuesta);
   }
-  if (r?.falta_aclarar && r.respuesta) return pregunta(c, "aclarar", pre + r.respuesta);
+  if (r?.falta_aclarar && r.respuesta) {
+    const llevo = eco(pre, listaCarrito(c.carrito)).replace(/^Anotado:/, "Llevo:");
+    return pregunta(c, "aclarar", pre + llevo + r.respuesta);
+  }
 
   const sinOpcion = c.carrito.find((i) => PRODUCTOS[i.id].opciones?.length && !i.nota);
   if (sinOpcion) {
@@ -1428,6 +1499,7 @@ async function confirmarPedido(c) {
   };
   c.comprobantePrevio = false;
   c.estado = "confirmado";
+  if (!anterior) c.ronda = (c.ronda || 0) + 1; // los botones del pedido que se acaba de confirmar ya quedan "viejos"
   c.paso = "";
   c.pasoVeces = 0;
   c.fallos = 0;
@@ -1660,6 +1732,38 @@ async function procesarTurno(c, entrada) {
       await responder(c, mensajeCerrado());
     }
     return;
+  }
+
+  // Botones para empezar otro pedido (vienen de la pregunta de abajo)
+  if (entrada.boton === "nuevo_pedido") {
+    empezarPedidoNuevo(c);
+    return enviarMenu(c, `¡Listo! Pedido nuevo ${EMOJI}`);
+  }
+  if (entrada.boton === "nuevo_no") return responder(c, "¡Listo! 😊 Cualquier cosa, aquí estoy.");
+
+  // Tocó un botón de un pedido que ya terminó: no se mezcla con lo de ahora
+  if (entrada.viejo && !["humano", "cambiar"].includes(entrada.boton)) {
+    const p = c.pedido;
+    if (p && ["recibido", "en_camino"].includes(p.estado)) {
+      const estado = p.estado === "en_camino" ? "ya va en camino 🛵" : "ya está en cocina 👩‍🍳";
+      const texto = `Tu pedido #${p.codigo} ${estado} ✅\n¿Quieres hacer otro pedido aparte?`;
+      recordar(c, "assistant", texto);
+      return enviarBotones(c.num, texto, [
+        ["nuevo_pedido", "🆕 Pedido nuevo"],
+        ["nuevo_no", "👍 No, gracias"],
+      ], "Si quieres otro pedido, escríbeme *pedido nuevo* 😊");
+    }
+    if (!entrada.producto) {
+      // Era un paso de un pedido viejo (pago, cantidad, "eso es todo"...): empezar de nuevo
+      if (c.carrito.length || c.estado !== "armando") empezarPedidoNuevo(c);
+      return enviarMenu(c, `Ese botón era de un pedido anterior 😊 Empecemos de nuevo 👇`);
+    }
+    // Tocó un producto viejo sin pedido en curso: arranca un pedido nuevo con ese producto
+    if (c.estado !== "armando") empezarPedidoNuevo(c);
+  }
+  if (/^(pedido nuevo|nuevo pedido|otro pedido)$/.test(n) && c.pedido && ["recibido", "en_camino"].includes(c.pedido.estado)) {
+    empezarPedidoNuevo(c);
+    return enviarMenu(c, `¡Listo! Pedido nuevo ${EMOJI}`);
   }
 
   // C) Atajos sin IA (más rápidos y seguros)
@@ -1914,6 +2018,11 @@ async function procesarTurno(c, entrada) {
   // "Con cuánto paga" solo si el cliente lo dijo de verdad (evita un "pago exacto" inventado)
   if (r.paga_con === 0 && !/exact/.test(n)) r.paga_con = null;
   if (r.paga_con > 0 && !/\d|mil|billete|veinte|treinta|cuarenta|cincuenta|cien/.test(n)) r.paga_con = null;
+  if (puedeCambiar && r.intencion === "pedido") {
+    const base = r.productos.length ? r.productos : c.carrito;
+    const falta = bebidaOlvidada(n, base);
+    if (falta && !c.carrito.some((i) => i.id === falta.id)) r.productos = [...base, falta];
+  }
   if (r.productos.length) {
     const { carrito, quitados } = validarProductos(r.productos);
     c.carrito = carrito;
@@ -2083,7 +2192,8 @@ async function comandoEquipo(a, texto) {
   const arg = resto.join(" ").trim();
   const pedidoDe = (num) => {
     const c = clientePorCodigo(num);
-    const p = c && (c.pedido?.codigo === Number(num) ? c.pedido : c.pedidoAnterior?.codigo === Number(num) ? c.pedidoAnterior : null);
+    const n = Number(num);
+    const p = c && [c.pedido, c.pedidoAnterior, ...(c.pedidosPrevios || [])].find((x) => x?.codigo === n);
     return { c, p };
   };
 
@@ -2348,10 +2458,13 @@ async function recibir(m, nombrePerfil, contacto = null) {
     case "interactive": {
       const resp = m.interactive?.button_reply || m.interactive?.list_reply || {};
       const id = String(resp.id || "");
+      // ¿Tocó un botón de un mensaje de un pedido anterior? (WhatsApp dice a qué mensaje responde)
+      const rondaBoton = rondaDeMensaje.get(m.context?.id);
+      const viejo = rondaBoton !== undefined && rondaBoton < (c.ronda || 0);
       if (id.startsWith("prod:") && PRODUCTOS[id.slice(5)]) {
-        return encolar(num, () => turnoSeguro(c, { producto: id.slice(5), texto: `Quiero ${PRODUCTOS[id.slice(5)].nombre}` }));
+        return encolar(num, () => turnoSeguro(c, { producto: id.slice(5), texto: `Quiero ${PRODUCTOS[id.slice(5)].nombre}`, viejo }));
       }
-      return encolar(num, () => turnoSeguro(c, { boton: id, texto: resp.title || "" }));
+      return encolar(num, () => turnoSeguro(c, { boton: id, texto: resp.title || "", viejo }));
     }
     case "button":
       return acumular(c, m.button?.text || "");
