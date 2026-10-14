@@ -247,6 +247,22 @@ function textoTarifas() {
 // Menú: lo principal (productos y combos) con detalle; bebidas y salsas en una línea al final.
 // Los sabores no se listan aquí: el bot los pregunta cuando el cliente pide ese producto.
 const minuscula = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+// Plural simple en español, solo para la primera palabra (agua→aguas, salchipapa→salchipapas, té→tés)
+function formaPlural(palabra) {
+  const t = String(palabra || "");
+  if (!t) return t;
+  if (/[aeiouáéíóú]$/i.test(t)) return t + "s";
+  if (/z$/i.test(t)) return t.slice(0, -1) + "ces";
+  return t + "es";
+}
+// "1 agua, 2 aguas" / "1 salchipapa de lomo, 2 salchipapas de lomo": para que el cliente sepa qué está contando
+function ejemploCantidad(p) {
+  const partes = String(p.corto || p.nombre).split(/\s+/);
+  const resto = partes.slice(1).join(" ");
+  const singular = minuscula([partes[0], resto].filter(Boolean).join(" "));
+  const plural = minuscula([formaPlural(partes[0]), resto].filter(Boolean).join(" "));
+  return `1 ${singular}, 2 ${plural}...`;
+}
 const esCategoria = (cat, palabra) => norm(cat).includes(palabra);
 
 function menuTexto() {
@@ -287,13 +303,12 @@ function menuTexto() {
     const sal = SALSAS.incluidas.map(minuscula);
     alFinal.push(`🌶️ Incluye ${sal.length <= 2 ? sal.join(" o ") : sal.slice(0, -1).join(", ") + " y " + sal.at(-1)}${salsaExtra != null ? ` (porción extra ${pesos(salsaExtra)})` : ""}`);
   }
-  if (CORTO) {
-    alFinal.push([textoTarifas() ? `🛵 Domicilio ${textoTarifas()}` : "", NEQUI ? "💜 Nequi o efectivo" : "💵 Efectivo"].filter(Boolean).join(" · "));
-  } else {
+  // Mensajes cortos: el menú queda solo con productos y bebidas; domicilio y pago se ven al armar el pedido
+  if (!CORTO) {
     if (textoTarifas()) alFinal.push(`🛵 Domicilio: ${textoTarifas()}`);
     alFinal.push(NEQUI ? "💜 Pagas por Nequi o en efectivo" : "💵 Pago en efectivo al recibir");
+    if (PEDIDO_MINIMO) alFinal.push(`Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}`);
   }
-  if (PEDIDO_MINIMO) alFinal.push(`Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}`);
   return unir(principales.join("\n\n"), alFinal.join("\n"));
 }
 
@@ -725,7 +740,7 @@ async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
   // 2) Sin catálogo: foto del menú (opcional) + carta en texto con lista para elegir
   if (IMAGEN_MENU) await enviar(c.num, { type: "image", image: { link: IMAGEN_MENU, caption: cortar(intro, 1000) } });
   const cuerpo = CORTO
-    ? `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n${EJEMPLO_PEDIDO ? `💡 Escríbeme, ej: *${EJEMPLO_PEDIDO}*\n` : ""}¿Cuál te provoca? 👇`
+    ? `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n¿Cuál te provoca? 👇`
     : `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n${CONSEJO_TODO_JUNTO}\n\n¿Qué se te antoja? Escríbeme o elige aquí 👇`;
   recordar(c, "assistant", cuerpo);
   let r = await enviarLista(c, cuerpo);
@@ -1791,7 +1806,7 @@ async function procesarTurno(c, entrada) {
         c.ofrecioCompartir = true;
         await memeAntes(c, "compartir"); // "Cuando piden una sola salchi para compartir" justo antes de preguntar cuántas
       }
-      const texto = `${p.corto || p.nombre}: ¿${cuantos}? 👇\n(si son más, escríbeme el número)`;
+      const texto = `${p.corto || p.nombre}: ¿${cuantos}? 👇\n(${ejemploCantidad(p)} si son más, escríbeme el número)`;
       recordar(c, "assistant", texto);
       return enviarBotones(c.num, texto, [1, 2, 3].map((n) => [`cant:${id}:${n}`, String(n)]), "");
     }
@@ -1803,7 +1818,7 @@ async function procesarTurno(c, entrada) {
       c.pasoVeces = 0;
       c.desdeLista = id;
       if (c.estado === "esperando_confirmacion") c.estado = "armando";
-      return responder(c, `¡Buena elección! 😋 ${p.nombre}: ¿${cuantos} quieres?${p.opciones?.length ? `\nY dime de cuál: ${p.opciones.join(", ")}` : ""}`);
+      return responder(c, `¡Buena elección! 😋 ${p.nombre}: ¿${cuantos} quieres? (${ejemploCantidad(p)})${p.opciones?.length ? `\nY dime de cuál: ${p.opciones.join(", ")}` : ""}`);
     }
     const cantidad = c.cantidadPendiente || 1;
     c.cantidadPendiente = null;
