@@ -195,16 +195,16 @@ export const MEMES = {
   horaNoche: "21", // desde esta hora (formato 24 h) se usa "entregado_noche" en vez de "entregado"
 
   momentos: {
-    saludo: ["saludo.jpg", "mesada.jpg"], // cliente nuevo saluda (va con el menú)
+    saludo: ["saludo.jpg", "mesada.jpg", "saludo_3.jpg", "saludo_4.jpg"], // cliente nuevo saluda (va con el menú)
     cliente_que_vuelve: ["cliente_que_vuelve.jpg"], // saluda alguien que ya había pedido
-    aclarar: ["aclarar.jpg"], // pidió "una salchi" sin decir cuál
-    compartir: ["compartir.jpg"], // pidió una sola salchipapa (en el "¿Algo más?")
+    aclarar: ["aclarar.jpg", "aclarar_2.jpg"], // pidió "una salchi" sin decir cuál
+    compartir: ["compartir.jpg", "compartir_2.jpg", "compartir_3.jpg"], // pidió una sola salchipapa (en el "¿Algo más?")
     bebida: ["bebida.jpg"], // se le ofrece bebida
     cambio: ["cambio.jpg"], // paga con billete de $100.000 o más
-    confirmado: ["confirmado.jpg", "confirmado_2.jpg"], // confirmó el pedido
-    sin_confirmar: ["sin_confirmar.jpg"], // no confirmó el resumen en 10 minutos
+    confirmado: ["confirmado.jpg", "confirmado_2.jpg", "confirmado_3.jpg"], // confirmó el pedido
+    sin_confirmar: ["sin_confirmar.jpg", "sin_confirmar_2.jpg"], // no confirmó el resumen en 10 minutos
     nequi: ["nequi.jpg"], // cocina verificó el pago de Nequi (/pagook)
-    salio: ["salio.jpg", "salio_2.jpg"], // /salio desde cocina
+    salio: ["salio.jpg", "salio_2.jpg", "salio_3.jpg"], // /salio desde cocina
     entregado: ["entregado.jpg"], // /entregado de día
     entregado_noche: ["entregado_noche.jpg"], // /entregado de noche
     gracias: ["gracias.jpg", "gracias_2.jpg", "gracias_3.jpg"], // el cliente da las gracias
