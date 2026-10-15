@@ -1112,6 +1112,9 @@ const QUEJA_RAPIDA = /(no (me )?ha llegado|no llega|llego (frio|mal|incompleto)|
 const PIDE_MENU = /(\bmenu\b|\bcatalogo\b|\bcarta\b|que (tienen|tienes|venden|vendes|hay)\b|\bprecios?\b)/;
 const AFIRMACION =
   /^(si+|s|dale|listo|ok|okay|okey|oki|confirmo|confirmar|confirmado|de una|perfecto|correcto|asi es|eso|claro|va|vale|hagale|👍|✅|👌)( (por favor|porfa|gracias|senor|senora|confirmo|de una|dale))?$/;
+// El cliente está quitando o reemplazando algo: ahí sí se respeta el carrito que arme el modelo
+const QUITA_O_CAMBIA =
+  /\b(quit\w*|saca\w*|elimin\w*|borr\w*|sin|mejor|cambi\w*|reemplaz\w*|en vez|en lugar|solo|solamente|nada mas|no quiero|ya no|olvid\w*|menos|que sea|que sean|era|eran|corrij\w*|correg\w*)\b/;
 const esAfirmacion = (t) => AFIRMACION.test(norm(t).replace(/[!¡.,;]+/g, "").trim());
 // "No, gracias / así está bien / eso es todo / ya con eso"... en todas sus formas
 const FRASE_FIN =
@@ -1425,7 +1428,11 @@ async function enviarResumen(c, pre = "") {
   txt += `\n*Total: ${pesos(total)}*`;
   txt += `\n${textoEntrega(c)}`;
   txt += `\n${textoPago(c, total)}`;
-  if (c.salsas || (SALSAS_EN_RESUMEN && SALSAS.porDefecto)) txt += `\n🌶️ Salsas: ${c.salsas || SALSAS.porDefecto} (incluidas)`;
+  if (c.salsas || (SALSAS_EN_RESUMEN && SALSAS.porDefecto)) {
+    // "sin salsas" / "sin ají" no lleva el "(incluidas)": se vería contradictorio
+    const quitaSalsa = /\b(sin|no|nada)\b/.test(norm(c.salsas));
+    txt += `\n🌶️ Salsas: ${c.salsas || SALSAS.porDefecto}${quitaSalsa ? "" : " (incluidas)"}`;
+  }
   if (c.notas) txt += `\n📝 ${c.notas}`;
   if (!esCambio) txt += `\n⏱️ ${c.entrega === "recoger" ? "Listo en" : "Llega en"} ${tiempoEntrega} aprox.`;
   txt += `\n\n¿Lo confirmo?`;
@@ -2070,6 +2077,13 @@ async function procesarTurno(c, entrada) {
   }
   if (r.productos.length) {
     const { carrito, quitados } = validarProductos(r.productos);
+    // Red de seguridad: el modelo debe devolver el pedido COMPLETO, pero a veces devuelve solo lo nuevo
+    // ("ponle otra de lomo" → solo la de lomo). Si se le "cayó" un producto y el cliente no pidió quitar
+    // ni cambiar nada, se conserva lo que ya llevaba en vez de borrarlo.
+    if (c.carrito.length && !QUITA_O_CAMBIA.test(n)) {
+      const ids = new Set(carrito.map((i) => i.id));
+      for (const i of c.carrito) if (!ids.has(i.id) && !agotados.has(i.id)) carrito.push({ ...i });
+    }
     c.carrito = carrito;
     c.cantidadPendiente = null;
     if (quitados.length) {
