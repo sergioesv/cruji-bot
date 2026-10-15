@@ -342,27 +342,14 @@ function menuTexto() {
   return unir(principales.join("\n\n"), alFinal.join("\n"));
 }
 
-// Menú en un solo párrafo: "salchipapa sencilla ($8.000), de lomo ($12.000) y de chorizo ($12.000). Para tomar: ..."
-function menuParrafo() {
-  const unirY = (a) => (a.length <= 1 ? a.join("") : `${a.slice(0, -1).join(", ")} y ${a.at(-1)}`);
-  const grupos = new Map();
-  for (const id of IDS) {
-    if (agotados.has(id) || esBebida(id) || esCategoria(PRODUCTOS[id].categoria, "salsa")) continue;
-    grupos.set(PRODUCTOS[id].categoria, [...(grupos.get(PRODUCTOS[id].categoria) || []), id]);
-  }
-  const frases = [];
-  for (const ids of grupos.values()) {
-    const nombres = ids.map((id) => String(PRODUCTOS[id].corto || PRODUCTOS[id].nombre).split(/\s+/));
-    // Palabras que todos tienen al principio ("salchipapa") se dicen una sola vez
-    let k = 0;
-    while (nombres.length > 1 && nombres.every((w) => w.length > k + 1 && norm(w[k]) === norm(nombres[0][k]))) k++;
-    frases.push(...ids.map((id, i) => `${minuscula(nombres[i].slice(i === 0 ? 0 : k).join(" "))} (${pesos(PRODUCTOS[id].precio)})`));
-  }
+// Menú en renglones sin viñetas ni emojis: un producto por línea y las bebidas aparte, en negrita
+function menuRenglones() {
+  const platos = IDS.filter((id) => !agotados.has(id) && !esBebida(id) && !esCategoria(PRODUCTOS[id].categoria, "salsa")).map(
+    (id) => `${PRODUCTOS[id].corto || PRODUCTOS[id].nombre} — ${pesos(PRODUCTOS[id].precio)}`
+  );
   const bebidas = IDS.filter((id) => esBebida(id) && !agotados.has(id));
-  const partes = [];
-  if (frases.length) partes.push(`${unirY(frases)}.`);
-  if (bebidas.length) partes.push(`Para tomar: ${minuscula(nombresBebidas())} (desde ${pesos(Math.min(...bebidas.map((id) => PRODUCTOS[id].precio)))}).`);
-  return partes.join(" ");
+  const tomar = bebidas.length ? `*Para tomar:* ${minuscula(nombresBebidas())}, desde ${pesos(Math.min(...bebidas.map((id) => PRODUCTOS[id].precio)))}` : "";
+  return unir(platos.join("\n"), tomar);
 }
 
 // ======================= HORARIO =======================
@@ -791,10 +778,10 @@ async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
     c.menuEnviado = ahora();
     return cat;
   }
-  // 2) Texto corrido: saludo + qué hay + precios en el mismo párrafo (sin lista desplegable)
+  // 2) Texto en renglones: saludo, un producto por línea, bebidas en negrita y la pregunta (sin lista desplegable)
   if (!BOTONES_FLUJO) {
-    const lista = menuParrafo();
-    const cuerpo = `${intro} ${/tenemos/i.test(intro) ? "" : "Hoy tenemos "}${lista} ${CORTO ? "¿Qué se te antoja? 😊" : `¿Qué se te antoja? Escríbeme tu pedido, ej: *${EJEMPLO_PEDIDO || "2 salchipapas y 1 gaseosa"}* 😊`}`;
+    const cierre = CORTO ? "¿Qué se te antoja? 😊" : `¿Qué se te antoja? Escríbeme tu pedido, ej: *${EJEMPLO_PEDIDO || "2 salchipapas y 1 gaseosa"}* 😊`;
+    const cuerpo = unir(`${intro}${/tenemos/i.test(intro) ? "" : " Hoy tenemos:"}`, menuRenglones(), cierre);
     recordar(c, "assistant", cuerpo);
     const r = await enviarTexto(c.num, cuerpo);
     if (r.ok) c.menuEnviado = ahora();
