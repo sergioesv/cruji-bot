@@ -1312,6 +1312,12 @@ async function pregunta(c, paso, texto) {
   return responder(c, texto);
 }
 
+// "Tu total es $22.500 (con domicilio)." para que el cliente sepa con cuánto pagar
+function totalTexto(c) {
+  const { domicilio, total } = calcular(c);
+  return `Tu total es *${pesos(total)}*${domicilio > 0 ? ` (con domicilio de ${pesos(domicilio)})` : ""}. `;
+}
+
 function textoPago(c, total) {
   if (c.pago === "nequi") return "💜 Pago por Nequi";
   if (c.pagaCon === 0 || (c.pagaCon && c.pagaCon === total)) return "💵 Efectivo, pago exacto";
@@ -1439,7 +1445,7 @@ async function siguientePaso(c, r, avisos = []) {
         // Botones: Nequi primero (es lo que más se usa)
         c.paso = "pago";
         c.pasoVeces = 1;
-        const texto = `${pre}¿Cómo vas a pagar? 👇`;
+        const texto = `${pre}${totalTexto(c)}¿Cómo vas a pagar? 👇`;
         recordar(c, "assistant", texto);
         return enviarBotones(
           c.num,
@@ -1451,7 +1457,7 @@ async function siguientePaso(c, r, avisos = []) {
           "Escríbeme *Nequi* o *efectivo* (y con cuánto pagas, para llevarte el cambio)"
         );
       }
-      return pregunta(c, "pago", `${pre}El pago es en efectivo al recibir 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
+      return pregunta(c, "pago", `${pre}${totalTexto(c)}El pago es en efectivo al recibir 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
     }
     // No quedó claro cómo paga: con Nequi, se le vuelven a mostrar los botones (una vez más) en vez de suponer efectivo
     if (NEQUI && (c.vecesPago || 0) < 1) {
@@ -2014,7 +2020,7 @@ async function procesarTurno(c, entrada) {
   if (entrada.boton === "pago_efectivo" && c.carrito.length) {
     c.pago = "efectivo";
     if (c.estado === "esperando_confirmacion") c.estado = "armando";
-    return pregunta(c, "pago", `¡Listo! 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
+    return pregunta(c, "pago", `¡Listo! 💵 ${totalTexto(c)}¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
   }
 
   // Cantidad: botón 1·2·3 o número escrito cuando se le preguntó "¿cuántas?"
