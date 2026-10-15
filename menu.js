@@ -198,12 +198,12 @@ export const MEMES = {
   horaNoche: "21", // desde esta hora (formato 24 h) se usa "entregado_noche" en vez de "entregado"
 
   momentos: {
-    saludo: [], // apagado: memes solo al final del pedido // cliente nuevo saluda (va con el menú)
-    cliente_que_vuelve: [], // apagado: memes solo al final del pedido // saluda alguien que ya había pedido
-    aclarar: [], // apagado: memes solo al final del pedido // pidió "una salchi" sin decir cuál
-    compartir: [], // apagado: memes solo al final del pedido // pidió una sola salchipapa (en el "¿Algo más?")
-    bebida: [], // apagado: memes solo al final del pedido // se le ofrece bebida
-    cambio: [], // apagado: memes solo al final del pedido // paga con billete de $100.000 o más
+    saludo: ["saludo.jpg", "mesada.jpg", "saludo_3.jpg", "saludo_4.jpg"], // cliente nuevo saluda (va con el menú)
+    cliente_que_vuelve: ["cliente_que_vuelve.jpg"], // saluda alguien que ya había pedido
+    aclarar: ["aclarar.jpg", "aclarar_2.jpg"], // pidió "una salchi" sin decir cuál
+    compartir: ["compartir.jpg", "compartir_2.jpg", "compartir_3.jpg"], // pidió una sola salchipapa (en el "¿Algo más?")
+    bebida: ["bebida.jpg"], // se le ofrece bebida
+    cambio: ["cambio.jpg"], // paga con billete de $100.000 o más
     confirmado: ["confirmado.jpg", "confirmado_2.jpg", "confirmado_3.jpg"], // confirmó el pedido
     sin_confirmar: ["sin_confirmar.jpg", "sin_confirmar_2.jpg"], // no confirmó el resumen en 10 minutos
     nequi: ["nequi.jpg"], // cocina verificó el pago de Nequi (/pagook)
@@ -211,7 +211,7 @@ export const MEMES = {
     entregado: ["entregado.jpg"], // /entregado de día
     entregado_noche: ["entregado_noche.jpg"], // /entregado de noche
     gracias: ["gracias.jpg", "gracias_2.jpg", "gracias_3.jpg"], // el cliente da las gracias
-    agotado: [], // apagado: memes solo al final del pedido // pidió algo que se acabó hoy
+    agotado: ["agotado.jpg"], // pidió algo que se acabó hoy
     cancelado: ["cancelado.jpg"], // el CLIENTE canceló (si cancela cocina, no va meme)
     cerrado: ["cerrado.jpg"], // escribe cuando está cerrado
     sticker: ["sticker_cliente.jpg"], // el cliente manda un sticker (sin pedido en curso)
