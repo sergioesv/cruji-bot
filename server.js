@@ -1343,7 +1343,9 @@ async function siguientePaso(c, r, avisos = []) {
     if (r?.mostrar_menu || !r?.respuesta) return enviarMenu(c, r?.respuesta || "¿Qué se te antoja? 😊");
     return pregunta(c, "productos", r.respuesta);
   }
-  if (r?.falta_aclarar && r.respuesta) {
+  // Si lo único que falta es la dirección (ya dio el barrio), no hay nada que aclarar de los productos: se sigue al paso de dirección
+  const soloFaltaDireccion = c.barrio && !c.direccion && !c.ubicacion && !c.carrito.some((i) => PRODUCTOS[i.id].opciones?.length && !i.nota);
+  if (r?.falta_aclarar && r.respuesta && !(soloFaltaDireccion && (r.barrio || r.direccion))) {
     const llevo = eco(pre, listaCarrito(c.carrito)).replace(/^Anotado:/, "Llevo:");
     return pregunta(c, "aclarar", pre + llevo + r.respuesta);
   }
@@ -1418,7 +1420,7 @@ async function siguientePaso(c, r, avisos = []) {
       return pregunta(
         c,
         "direccion",
-        `${pre}¡Listo, ${cubierto}! ¿Me das la dirección exacta? (calle o carrera, número, casa o apto y una referencia). También puedes mandarme tu ubicación 📍`
+        `${pre}¡Listo, ${cubierto}! ¿Me das la dirección exacta? (calle o carrera, número, casa o apto y una referencia). También puedes mandarme tu ubicación 📍 o un link de Google Maps`
       );
     }
     // Dirección "de referencia" (sin números, ej: "la tienda de doña Mari"): pedir ubicación una vez, sin obligar
@@ -2542,6 +2544,41 @@ function acumular(c, texto) {
   }, T.rafaga);
 }
 
+// Link de Google Maps pegado en el chat → coordenadas (sirve "Compartir ubicación" de Maps y los links cortos maps.app.goo.gl)
+const HOST_MAPA = /^(www\.)?(google\.[a-z.]+|maps\.google\.[a-z.]+|maps\.app\.goo\.gl|goo\.gl|g\.co)$/i;
+function coordsDeUrl(u) {
+  const t = decodeURIComponent(String(u));
+  const m =
+    t.match(/!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/) ||
+    t.match(/@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/) ||
+    t.match(/[?&](?:q|ll|query|destination|daddr|center)=(-?\d{1,3}\.\d+)[, +]+(-?\d{1,3}\.\d+)/);
+  if (!m) return null;
+  const lat = Number(m[1]);
+  const lng = Number(m[2]);
+  return Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
+}
+async function coordenadasDeTexto(texto) {
+  const url = String(texto || "").match(/https?:\/\/[^\s]+/i)?.[0];
+  if (!url) return null;
+  try {
+    let actual = url.replace(/[)\].,;]+$/, "");
+    for (let i = 0; i < 5; i++) {
+      const host = new URL(actual).hostname;
+      if (!HOST_MAPA.test(host)) return null;
+      const directo = coordsDeUrl(actual);
+      if (directo) return directo;
+      const r = await axios.get(actual, { maxRedirects: 0, validateStatus: () => true, timeout: 6000, responseType: "stream" });
+      r.data.destroy();
+      const sig = r.headers?.location;
+      if (!sig) return null;
+      actual = new URL(sig, actual).toString();
+    }
+  } catch {
+    /* link raro o sin respuesta: el bot sigue como si fuera texto normal */
+  }
+  return null;
+}
+
 async function recibir(m, nombrePerfil, contacto = null) {
   if (!m?.id || yaVisto(m.id)) return;
   // Con número visible llega "from"; si la persona ocultó su número, llega solo "from_user_id" (ID tipo "CO.123…")
@@ -2563,8 +2600,17 @@ async function recibir(m, nombrePerfil, contacto = null) {
   marcarLeido(m.id);
 
   switch (m.type) {
-    case "text":
+    case "text": {
+      const coords = await coordenadasDeTexto(textoPlano);
+      if (coords) {
+        c.ubicacion = coords;
+        const resto = textoPlano.replace(/https?:\/\/[^\s]+/gi, "").trim();
+        const texto = `[Envié mi ubicación: ${mapa(coords)}]${resto ? " " + resto : ""}`;
+        if (rafagas.has(num)) return acumular(c, texto);
+        return encolar(num, () => turnoSeguro(c, { ubicacion: true, texto }));
+      }
       return acumular(c, textoPlano);
+    }
     case "audio": {
       const transcrito = await transcribirAudio(m.audio?.id);
       console.log("Transcrito:", transcrito || "(vacío)");
@@ -2588,6 +2634,7 @@ async function recibir(m, nombrePerfil, contacto = null) {
       const l = m.location || {};
       if (l.latitude == null || l.longitude == null) return;
       c.ubicacion = { lat: l.latitude, lng: l.longitude };
+      if (!c.direccion && l.address) c.direccion = cortar(String(l.address), 120); // la dirección que trae el pin evita volver a preguntarla
       const texto = `[Envié mi ubicación${l.address ? ` (${l.address})` : l.name ? ` (${l.name})` : ""}: ${mapa(c.ubicacion)}]`;
       // Si venía escribiendo, se junta con sus mensajes; si no, se atiende de una
       if (rafagas.has(num)) return acumular(c, texto);

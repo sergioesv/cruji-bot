@@ -46,7 +46,7 @@ export const PRODUCTOS = {
     precio: 12000,
     categoria: "🍟 Salchipapas",
     descripcion: "", // ej: "Papa + salchicha + chorizo"
-    alias: ["chorizo", "de chorizo", "con chorizo", "salchipapa de chorizo", "salchipapa con chorizo"],
+    alias: ["chorizo", "de chorizo", "con chorizo", "chori", "choris", "de chori", "con chori", "salchichori", "salchi chori", "salchipapa chori", "salchipapa de chori", "salchipapa con chori", "salchipapa de chorizo", "salchipapa con chorizo"],
     enLista: true,
   },
 
@@ -117,7 +117,8 @@ export const NEGOCIO = {
   descripcion: "salchipapas a domicilio", // cómo se describe el negocio ante la IA
   ejemploPedido: "2 salchipapas de lomo y 1 sencilla", // ejemplo que sale en el menú
   reglasProductos: `- Si dice "salchipapa" o "salchipapas" sin decir cuál, no adivines: pregunta si la quiere sencilla, de lomo o de chorizo, y pon falta_aclarar = true.
-- "salchi" o "salchipapita" = salchipapa.`,
+- "salchi" o "salchipapita" = salchipapa.
+- "chori" o "salchichori" = chorizo (salchipapa de chorizo). "lomito" = lomo.`,
 
   // Al elegir de la lista: true = pregunta "¿cuántas?" con botones 1 · 2 · 3 · false = anota 1 y sigue
   preguntarCuantosEnLista: true,
