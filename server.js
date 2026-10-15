@@ -53,6 +53,7 @@ const EMOJI = String(NEGOCIO.emoji || "😋").trim();
 const LEMA = String(NEGOCIO.lema || "").trim();
 const DESCRIPCION_NEGOCIO = String(NEGOCIO.descripcion || "un negocio de comida a domicilio").trim();
 const EJEMPLO_PEDIDO = String(NEGOCIO.ejemploPedido || "").trim();
+const RESUMEN_BEBIDAS_MENU = String(NEGOCIO.resumenBebidas || "").trim();
 const REGLAS_PRODUCTOS = String(NEGOCIO.reglasProductos || "").trim();
 const CON_QUIEN = ENCARGADO ? `con ${ENCARGADO}` : "con alguien del equipo";
 const A_QUIEN = ENCARGADO ? `a ${ENCARGADO}` : "al equipo";
@@ -102,6 +103,10 @@ const PT = NEGOCIO.preguntarTipo || {};
 const TIPOS = (PT.productos || []).filter((id) => PRODUCTOS[id]).slice(0, 3);
 const PALABRAS_TIPO = (PT.palabras || []).map((w) => String(w).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")).filter(Boolean);
 const PREGUNTA_TIPO = String(PT.pregunta || "¿Cuál quieres? 👇").trim();
+// Mensajes cortos (menu.js → mensajesCortos: true): la gente lee la notificación sin abrir el chat
+const CORTO = NEGOCIO.mensajesCortos === true;
+const SALSAS_EN_MENU = SALSAS.mostrarEnMenu !== false;
+const SALSAS_EN_RESUMEN = SALSAS.mostrarEnResumen !== false;
 
 // ======================= UTILIDADES =======================
 const norm = (s) =>
@@ -171,6 +176,33 @@ const nombreItem = (i) => `${PRODUCTOS[i.id].nombre}${i.nota ? ` (${i.nota})` : 
 const listaCarrito = (carrito) => carrito.map((i) => `${i.cantidad}x ${nombreItem(i)}`).join(", ");
 const unidades = (carrito) => carrito.reduce((s, i) => s + i.cantidad, 0);
 
+// Red de seguridad: si el cliente nombró una bebida y el modelo se la dejó por fuera, el código la agrega
+// (el modelo solo interpreta; lo que se pidió lo garantiza el código). No aplica si la niega ("sin gaseosa").
+function bebidaOlvidada(texto, lista) {
+  const t = norm(texto);
+  if (!t) return null;
+  const NUM = { un: 1, una: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6 };
+  if ((lista || []).some((p) => esBebida(p?.id))) return null; // ya hay una bebida: el modelo la entendió (evita confundir "coca grande")
+  let mejor = null;
+  for (const id of IDS) {
+    if (!esBebida(id) || agotados.has(id)) continue;
+    const p = PRODUCTOS[id];
+    for (const cand of [p.nombre, p.corto, ...(p.alias || [])]) {
+      const n = norm(cand);
+      if (!n || n.length < 4) continue;
+      const i = t.indexOf(n);
+      if (i < 0 || (mejor && n.length <= mejor.largo)) continue;
+      const antes = t.slice(Math.max(0, i - 25), i);
+      if (/\b(sin|no quiero|no)\s+(\w+\s+){0,2}$/.test(antes) || /\b(quita|quitar|quitale|cancela)\b/.test(antes)) continue;
+      const m = antes.match(/(\d+|un|una|uno|dos|tres|cuatro|cinco|seis)\s+(?:de\s+|la\s+|las\s+)?$/);
+      const cantidad = m ? (/^\d+$/.test(m[1]) ? Number(m[1]) : NUM[m[1]]) : 1;
+      const nota = (p.opciones || []).find((o) => t.includes(norm(o))) || "";
+      mejor = { id, cantidad: cantidad > 0 && cantidad <= 20 ? cantidad : 1, nota, largo: n.length };
+    }
+  }
+  return mejor ? { id: mejor.id, cantidad: mejor.cantidad, nota: mejor.nota } : null;
+}
+
 // ---------- Domicilio dinámico ----------
 // Distancia en km por calles (aprox.): línea recta × 1.3
 function kmPorCalles(u) {
@@ -215,6 +247,49 @@ function textoTarifas() {
 // Menú: lo principal (productos y combos) con detalle; bebidas y salsas en una línea al final.
 // Los sabores no se listan aquí: el bot los pregunta cuando el cliente pide ese producto.
 const minuscula = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+// Plural simple en español, solo para la primera palabra (agua→aguas, salchipapa→salchipapas, té→tés)
+function formaPlural(palabra) {
+  const t = String(palabra || "");
+  if (!t) return t;
+  if (/[aeiouáéíóú]$/i.test(t)) return t + "s";
+  if (/z$/i.test(t)) return t.slice(0, -1) + "ces";
+  return t + "es";
+}
+// "1 agua, 2 aguas" / "1 salchipapa de lomo, 2 salchipapas de lomo": para que el cliente sepa qué está contando
+function ejemploCantidad(p) {
+  const partes = String(p.corto || p.nombre).split(/\s+/);
+  const resto = partes.slice(1).join(" ");
+  const singular = minuscula([partes[0], resto].filter(Boolean).join(" "));
+  const plural = minuscula([formaPlural(partes[0]), resto].filter(Boolean).join(" "));
+  return `1 ${singular}, 2 ${plural}...`;
+}
+// Pluraliza también lo que sigue al nombre, SOLO para las salchipapas (que es donde se sabe que
+// "sencilla" es un adjetivo que concuerda). En lo demás ("Jugo Hit", "Gaseosa personal") no se toca,
+// para no pluralizar por error una marca o un tamaño.
+function formaPluralFrase(resto) {
+  if (!resto) return resto;
+  const palabras = resto.split(/\s+/);
+  if (/^(de|del|con|sin)$/i.test(palabras[0])) return resto; // "de lomo" no cambia
+  const ultima = palabras.pop();
+  return [...palabras, formaPlural(ultima)].join(" ");
+}
+const mayuscula = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+// Para las salchipapas usa la palabra corta que ya usas en el chat ("salchi"), si está configurada
+function palabraBase(p, id) {
+  if (TIPOS.includes(id) && PT.palabras?.length) {
+    const cortas = PT.palabras.map(String).filter((w) => !/s$/i.test(w));
+    if (cortas.length) return cortas.reduce((a, b) => (b.length < a.length ? b : a));
+  }
+  return String(p.corto || p.nombre).split(/\s+/)[0];
+}
+// Texto del botón: "1 Salchi de lomo", "2 Salchis de lomo"... (máximo 20 letras, que es lo que deja WhatsApp)
+function tituloCantidadBoton(p, id, n) {
+  const partes = String(p.corto || p.nombre).split(/\s+/);
+  const resto = TIPOS.includes(id) ? (n === 1 ? partes.slice(1).join(" ") : formaPluralFrase(partes.slice(1).join(" "))) : partes.slice(1).join(" ");
+  const base = palabraBase(p, id);
+  const baseForma = n === 1 ? base : formaPlural(base);
+  return cortar(`${n} ${[mayuscula(baseForma), resto].filter(Boolean).join(" ")}`, 20);
+}
 const esCategoria = (cat, palabra) => norm(cat).includes(palabra);
 
 function menuTexto() {
@@ -231,7 +306,9 @@ function menuTexto() {
     if (esCategoria(cat, "bebida")) {
       if (disponibles.length) {
         const desde = Math.min(...disponibles.map((id) => PRODUCTOS[id].precio));
-        alFinal.push(`🥤 Bebidas: ${disponibles.map((id) => minuscula(PRODUCTOS[id].corto || PRODUCTOS[id].nombre)).join(", ")} (desde ${pesos(desde)})`);
+        alFinal.push(
+          CORTO ? `🥤 Bebidas desde ${pesos(desde)}${RESUMEN_BEBIDAS_MENU ? ` (${minuscula(RESUMEN_BEBIDAS_MENU)})` : ""}` : `🥤 Bebidas: ${disponibles.map((id) => minuscula(PRODUCTOS[id].corto || PRODUCTOS[id].nombre)).join(", ")} (desde ${pesos(desde)})`
+        );
       }
       continue;
     }
@@ -239,21 +316,26 @@ function menuTexto() {
       if (disponibles.length) salsaExtra = Math.min(...disponibles.map((id) => PRODUCTOS[id].precio));
       continue;
     }
+    const emojiCat = (String(cat).match(/\p{Extended_Pictographic}/u) || [""])[0];
+    const vineta = CORTO && emojiCat ? emojiCat : "•";
     const lineas = ids.map((id) => {
       const p = PRODUCTOS[id];
       const nombre = p.corto || p.nombre;
-      if (agotados.has(id)) return `• ${nombre}: agotado hoy 😔`;
-      return `• ${nombre} — ${pesos(p.precio)}${p.descripcion ? `\n   _${p.descripcion}_` : ""}`;
+      if (agotados.has(id)) return `${vineta} ${nombre}: agotado hoy 😔`;
+      return `${vineta} ${nombre} — ${pesos(p.precio)}${p.descripcion ? `\n   _${p.descripcion}_` : ""}`;
     });
-    principales.push(`*${cat}*\n${lineas.join("\n")}`);
+    principales.push(CORTO ? lineas.join("\n") : `*${cat}*\n${lineas.join("\n")}`);
   }
-  if (SALSAS.incluidas?.length) {
+  if (SALSAS.incluidas?.length && SALSAS_EN_MENU) {
     const sal = SALSAS.incluidas.map(minuscula);
     alFinal.push(`🌶️ Incluye ${sal.length <= 2 ? sal.join(" o ") : sal.slice(0, -1).join(", ") + " y " + sal.at(-1)}${salsaExtra != null ? ` (porción extra ${pesos(salsaExtra)})` : ""}`);
   }
-  if (textoTarifas()) alFinal.push(`🛵 Domicilio: ${textoTarifas()}`);
-  alFinal.push(NEQUI ? "💜 Pagas por Nequi o en efectivo" : "💵 Pago en efectivo al recibir");
-  if (PEDIDO_MINIMO) alFinal.push(`Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}`);
+  // Mensajes cortos: el menú queda solo con productos y bebidas; domicilio y pago se ven al armar el pedido
+  if (!CORTO) {
+    if (textoTarifas()) alFinal.push(`🛵 Domicilio: ${textoTarifas()}`);
+    alFinal.push(NEQUI ? "💜 Pagas por Nequi o en efectivo" : "💵 Pago en efectivo al recibir");
+    if (PEDIDO_MINIMO) alFinal.push(`Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}`);
+  }
   return unir(principales.join("\n\n"), alFinal.join("\n"));
 }
 
@@ -366,13 +448,46 @@ function recordar(c, role, content) {
   while (c.historial.length > 14) c.historial.shift();
 }
 
+function guardarPedidoPrevio(c) {
+  c.pedidoAnterior = c.pedido;
+  c.pedidosPrevios = [c.pedido, ...(c.pedidosPrevios || []).filter((p) => p !== c.pedido)].slice(0, 5);
+}
+// Empezar un pedido nuevo (el anterior sigue su curso en cocina y se puede manejar con su número)
+function empezarPedidoNuevo(c) {
+  if (c.pedido) guardarPedidoPrevio(c);
+  Object.assign(c, {
+    carrito: [],
+    entrega: "domicilio",
+    pago: "",
+    pagaCon: null,
+    salsas: "",
+    notas: "",
+    preguntoPago: false,
+    ofrecioBebida: false,
+    ofrecioCompartir: false,
+    memeCambio: false,
+    memesPedido: 0,
+    cantidadPendiente: null,
+    productoPendiente: null,
+    pidioTelefono: false,
+    pidioUbicacion: false,
+    estado: "armando",
+    recordoConfirmacion: false,
+    pedido: null,
+    fallos: 0,
+    paso: "",
+    pasoVeces: 0,
+    ronda: (c.ronda || 0) + 1,
+  });
+}
 function reiniciarSiHaceFalta(c) {
   const t = ahora();
   const inactivo = t - c.ultimaActividad > T.reinicio;
   const terminado = c.pedido && ["entregado", "cancelado"].includes(c.pedido.estado);
   const viejo = c.pedido && t - c.pedido.ts > T.reinicio;
   if (!inactivo && !terminado && !viejo) return;
-  if (c.pedido) c.pedidoAnterior = c.pedido;
+  if (c.pedido) guardarPedidoPrevio(c);
+  c.ronda = (c.ronda || 0) + 1;
   Object.assign(c, {
     historial: [],
     carrito: [],
@@ -387,6 +502,8 @@ function reiniciarSiHaceFalta(c) {
     memeCambio: false,
     memesPedido: 0,
     cantidadPendiente: null,
+    productoPendiente: null,
+    vecesPago: 0,
     pidioTelefono: false,
     pidioUbicacion: false,
     estado: "armando",
@@ -417,6 +534,8 @@ const huella = (c) =>
 // ======================= WHATSAPP =======================
 const authMeta = () => ({ Authorization: `Bearer ${WHATSAPP_TOKEN}` });
 
+// Botones viejos: cada pedido es una "ronda". Si el cliente toca un botón de una ronda anterior, no se mezcla con lo de ahora
+const rondaDeMensaje = new Map(); // id del mensaje con botones -> ronda del cliente cuando se envió
 async function enviar(to, payload) {
   if (!to) {
     console.error("No se envió: mensaje sin destinatario");
@@ -430,7 +549,12 @@ async function enviar(to, payload) {
       { messaging_product: "whatsapp", recipient_type: "individual", ...destino, ...payload },
       { headers: authMeta(), timeout: 15000 }
     );
-    return { ok: true, id: r.data?.messages?.[0]?.id };
+    const id = r.data?.messages?.[0]?.id;
+    if (id && payload.type === "interactive" && !EQUIPO.includes(to)) {
+      rondaDeMensaje.set(id, clientes.get(to)?.ronda || 0);
+      if (rondaDeMensaje.size > 20000) rondaDeMensaje.delete(rondaDeMensaje.keys().next().value);
+    }
+    return { ok: true, id };
   } catch (e) {
     const err = e.response?.data?.error;
     console.error(`Error enviando a ${to}:`, JSON.stringify(err || e.message));
@@ -509,6 +633,7 @@ const memesFaltantes = Object.values(MEMES.momentos || {})
   .flat()
   .filter((f) => !memesEnCarpeta.has(f));
 
+const memesVistosPorCliente = new Map();
 // Manda un meme del momento (si toca). Nunca rompe el flujo: si falla, sigue como si nada.
 async function enviarMeme(c, momento) {
   try {
@@ -519,7 +644,9 @@ async function enviarMeme(c, momento) {
     if (!MEMES_SIEMPRE.has(momento) && Math.random() >= PROB_MEME) return false;
     if (ahora() - (c.ultimoMeme || 0) < 15 * 1000) return false; // máximo uno por turno
     if (!MEMES_SIEMPRE.has(momento) && (c.memesPedido || 0) >= MAX_MEMES) return false; // ya van suficientes en este pedido
-    c.memesVistos = c.memesVistos || [];
+    // Memes que ya vio este cliente (se guardan aparte para recordarlos entre pedidos, aunque pasen días)
+    if (!memesVistosPorCliente.has(c.num)) memesVistosPorCliente.set(c.num, []);
+    c.memesVistos = memesVistosPorCliente.get(c.num);
     const nuevos = lista.filter((f) => !c.memesVistos.includes(f));
     const opciones = nuevos.length ? nuevos : lista;
     const archivo = opciones[Math.floor(Math.random() * opciones.length)];
@@ -528,12 +655,22 @@ async function enviarMeme(c, momento) {
       c.ultimoMeme = ahora();
       c.memesPedido = (c.memesPedido || 0) + 1;
       c.memesVistos.push(archivo);
-      if (c.memesVistos.length > 40) c.memesVistos.shift();
+      if (c.memesVistos.length > 60) c.memesVistos.shift();
+      if (memesVistosPorCliente.size > 5000) memesVistosPorCliente.delete(memesVistosPorCliente.keys().next().value);
     }
     return r.ok;
   } catch {
     return false;
   }
+}
+// Meme primero, una pausa corta y luego el mensaje concreto: así la notificación que ve el cliente es la útil
+const PAUSA_SALUDO = Number(env.PAUSA_MEME_MS ?? (Number(MEMES.pausaSaludoSegundos ?? 5) * 1000));
+const PAUSA_PEDIDO = Number(env.PAUSA_MEME_MS ?? (Number(MEMES.pausaSegundos ?? 2.5) * 1000));
+const esperarMs = (ms) => new Promise((r) => setTimeout(r, ms));
+async function memeAntes(c, momento, pausa = PAUSA_PEDIDO) {
+  const ok = await enviarMeme(c, momento);
+  if (ok && pausa > 0) await esperarMs(pausa);
+  return ok;
 }
 const silenciarMemes = (c, minutos = 60) => {
   c.sinMemesHasta = ahora() + minutos * MIN;
@@ -545,6 +682,14 @@ const esDeNoche = () => {
 
 // "Anotado: ..." solo si ese mismo listado no se acaba de decir en el mensaje (evita repetir el pedido dos veces)
 const eco = (pre, lista) => (pre.includes(lista) ? "" : `Anotado: ${lista} ✅\n`);
+// Igual que eco, pero si ya se le dijo esa misma lista al cliente, no se repite (mensajes más cortos)
+function ecoUnaVez(c, pre, lista) {
+  const e = eco(pre, lista);
+  if (!e) return "";
+  if (CORTO && c.ecoDicho === lista) return "";
+  c.ecoDicho = lista;
+  return e;
+}
 const tituloCategoria = (cat, max) => cortar(String(cat).replace(/^[^\p{L}\p{N}]+/u, "").trim() || "Menú", max);
 const CONSEJO_TODO_JUNTO = EJEMPLO_PEDIDO ? `💡 También puedes escribirme todo junto, ej: *${EJEMPLO_PEDIDO}*` : "💡 También puedes escribirme todo tu pedido en un solo mensaje";
 
@@ -571,6 +716,26 @@ async function enviarLista(c, cuerpo, boton = "🛒 Elegir producto") {
   });
 }
 
+// Lista desplegable SOLO de bebidas (se ofrece después de elegir la comida): cada fila se anota con un toque
+async function enviarListaBebidas(c, cuerpo) {
+  const filas = IDS.filter((id) => esBebida(id) && !agotados.has(id)).slice(0, 9);
+  if (!filas.length) return { ok: false };
+  const rows = filas.map((id) => {
+    const p = PRODUCTOS[id];
+    const detalle = p.opciones?.length ? `${pesos(p.precio)} · ${p.opciones.join(", ")}` : pesos(p.precio);
+    return { id: `prod:${id}`, title: cortar(p.corto || p.nombre, 24), description: cortar(detalle, 72) };
+  });
+  rows.unshift({ id: "bebida_no", title: "🙅 No, gracias", description: "Seguir sin bebida" }); // primera opción: seguir rápido
+  return enviar(c.num, {
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: cortar(cuerpo, 1024) },
+      action: { button: "🥤 Elegir bebida", sections: [{ title: "🥤 Bebidas", rows }] },
+    },
+  });
+}
+
 // Carrito nativo de WhatsApp (si hay catálogo de Meta): el cliente agrega varias cosas y lo envía de una vez
 async function enviarCatalogo(c, intro) {
   if (!CATALOGO_WA) return { ok: false };
@@ -592,12 +757,18 @@ async function enviarCatalogo(c, intro) {
 }
 
 async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
-  // Modo compatible sin Flow ni carrito nativo de catálogo: usamos mensajes y listas
-  // interactivas estándar. El carrito acumulativo vive en el estado del bot.
-  // Así el pedido no depende de que el negocio tenga catálogo configurado en Meta.
-  // Foto del menú (opcional) + carta en texto con lista para elegir.
+  // 1) Con catálogo de Meta: carrito nativo (varias cosas a la vez, con fotos)
+  const cat = await enviarCatalogo(c, intro);
+  if (cat.ok) {
+    recordar(c, "assistant", `${intro}\n[Se envió el catálogo con carrito]`);
+    c.menuEnviado = ahora();
+    return cat;
+  }
+  // 2) Sin catálogo: foto del menú (opcional) + carta en texto con lista para elegir
   if (IMAGEN_MENU) await enviar(c.num, { type: "image", image: { link: IMAGEN_MENU, caption: cortar(intro, 1000) } });
-  const cuerpo = `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n${CONSEJO_TODO_JUNTO}\n\n¿Qué se te antoja? Escríbeme o elige aquí 👇`;
+  const cuerpo = CORTO
+    ? `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n¿Cuál te provoca? 👇`
+    : `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n${CONSEJO_TODO_JUNTO}\n\n¿Qué se te antoja? Escríbeme o elige aquí 👇`;
   recordar(c, "assistant", cuerpo);
   let r = await enviarLista(c, cuerpo);
   if (!r.ok) r = await enviarTexto(c.num, cuerpo);
@@ -610,21 +781,38 @@ async function preguntarAlgoMas(c, pre = "") {
   const principales = c.carrito.filter((i) => !esBebida(i.id));
   if (!c.ofrecioCompartir && principales.length === 1 && principales[0].cantidad === 1) {
     c.ofrecioCompartir = true;
-    await enviarMeme(c, "compartir");
+    await memeAntes(c, "compartir");
   }
-  const texto = `${pre}${eco(pre, listaCarrito(c.carrito))}¿Algo más? 😊`;
+  const texto = `${pre}${ecoUnaVez(c, pre, listaCarrito(c.carrito))}¿Algo más? 😊`;
   c.paso = "mas";
   c.pasoVeces = 0;
   recordar(c, "assistant", texto);
-  return enviarBotones(
-    c.num,
-    texto,
-    [
-      ["mas_fin", "✅ Eso es todo"],
-      ["mas_agregar", "➕ Agregar algo"],
-    ],
-    "Escríbeme qué más quieres, o dime *no, gracias* y seguimos 😊"
-  );
+  // Botones directos: [Eso es todo] [Otra salchi] [Bebida]. Sin tipos/bebidas configurados: [Agregar algo]
+  const hayTipos = TIPOS.some((id) => !agotados.has(id));
+  const hayBebidas = IDS.some((id) => esBebida(id) && !agotados.has(id));
+  const botones = [["mas_fin", "✅ Eso es todo"]];
+  if (hayTipos) botones.push(["mas_otra", cortar(String(PT.botonOtra || "➕ Otra"), 20)]);
+  if (hayBebidas) botones.push(["mas_bebida", "🥤 Bebida"]);
+  if (botones.length < 3 && !(hayTipos && hayBebidas)) botones.push(["mas_agregar", "➕ Agregar algo"]);
+  return enviarBotones(c.num, texto, botones.slice(0, 3), "Escríbeme qué más quieres, o dime *no, gracias* y seguimos 😊");
+}
+
+// Oferta de bebida: lista con "No, gracias" de primera y el texto diciendo qué hay
+const RESUMEN_BEBIDAS = String(NEGOCIO.resumenBebidas || "").trim();
+function nombresBebidas() {
+  if (RESUMEN_BEBIDAS) return RESUMEN_BEBIDAS;
+  const n = IDS.filter((id) => esBebida(id) && !agotados.has(id)).map((id) => minuscula(PRODUCTOS[id].corto || PRODUCTOS[id].nombre));
+  return n.length <= 1 ? n.join("") : `${n.slice(0, -1).join(", ")} o ${n.at(-1)}`;
+}
+async function ofrecerBebida(c, pre = "") {
+  c.ofrecioBebida = true;
+  c.paso = "bebida";
+  c.pasoVeces = 0;
+  const texto = CORTO ? `${pre}¿Algo de tomar? 🥤 ${nombresBebidas()} 👇` : `${pre}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombresBebidas()}.\nSi no, dime *no, gracias* y seguimos 😊`;
+  recordar(c, "assistant", texto);
+  const r = await enviarListaBebidas(c, texto);
+  if (r.ok) return r;
+  return pregunta(c, "bebida", `${pre}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombresBebidas()}. Si no, dime *no, gracias* 😊`);
 }
 
 // ---------- Avisos al equipo (con reintento si WhatsApp no los entrega) ----------
@@ -800,6 +988,7 @@ ${REGLAS_PRODUCTOS ? REGLAS_PRODUCTOS + "\n" : ""}- Si no dice la cantidad, preg
 - Si el producto tiene opciones, pon la elegida en "nota" (ej: "Coca-Cola"). Varias opciones del mismo producto = una línea por opción (2 de Coca-Cola y 1 de manzana = dos líneas).
 - "nota" también sirve para indicaciones de ese producto (ej: "bien doraditas"). Si no hay, "".
 - NUNCA repitas un producto en la lista: cada producto (con su nota) va UNA sola vez con la cantidad TOTAL (si tenía 5 de un producto y no las cambia, siguen siendo 5).
+- Si dice "una, y otra" o "me da una y me da una" sin repetir el producto, son DOS del último producto nombrado (cantidad 2, en UNA sola línea). Nunca ignores un producto que el cliente nombró (bebidas incluidas): si dudas de algo, anota lo claro y pregunta solo por lo dudoso.
 - Si pide algo que no vendemos, dilo con amabilidad y ofrece lo que hay.
 - En Colombia "una gaseosa de 2000" o "una de tres mil" habla del PRECIO, no del tamaño: ofrécele la opción más parecida diciendo su precio de la lista (ej: "¿Te sirve la gaseosa personal de $3.500?") y pon falta_aclarar = true.
 
@@ -812,7 +1001,7 @@ CAMPOS DEL JSON:
 - falta_aclarar: true solo si tu respuesta pregunta algo sobre los productos (cuál, cuántos o qué sabor).
 - entrega: "recoger" si dice que pasa a recoger; "domicilio" si lo pide a domicilio; si no lo dice, "".
 - barrio, direccion, nombre: lo que el cliente diga en ESTE mensaje; si no lo dice, "". La dirección es calle o carrera, número, casa o apto y referencias, sin el barrio.
-- pago: "efectivo" o "nequi" si lo dice; si no, "".
+- pago: "efectivo" o "nequi" si lo dice; si no, "". "Transferencia", "transfiero", "consignación", "Bre-B", "llave" o "neki" = "nequi".
 - paga_con: con cuánto paga en efectivo, en pesos ("con 50", "billete de 50" = 50000; "exacto" = 0). Si no lo dice, null.
 - salsas: qué salsas incluidas quiere, si lo dice (ej: "ají picante", "sin ají"); si no, "".
 - notas: indicaciones generales del pedido (ej: "llamar al llegar", "timbre dañado"); si no, "".
@@ -964,8 +1153,8 @@ async function saludar(c) {
     return siguientePaso(c, null, [sigo]);
   }
   if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) {
-    await enviarMeme(c, c.pedidoAnterior ? "cliente_que_vuelve" : "saludo");
-    return enviarMenu(c, `${hola} Te damos la bienvenida a ${MARCA} ${EMOJI}${LEMA ? " " + LEMA : ""}`);
+    await memeAntes(c, c.pedidoAnterior ? "cliente_que_vuelve" : "saludo", PAUSA_SALUDO); // la pausa solo si salió meme
+    return enviarMenu(c, CORTO ? `${hola} Hoy tenemos:` : `${hola} Te damos la bienvenida a ${MARCA} ${EMOJI}${LEMA ? " " + LEMA : ""}`);
   }
   return responder(c, `${hola} ¿Qué se te antoja hoy? 😊 (Si quieres ver el menú otra vez, escribe *menú*)`);
 }
@@ -983,7 +1172,7 @@ const RECORDATORIO_PASO = {
 };
 
 // ---------- "Una salchi" sin decir cuál: preguntar con botones ----------
-const NUM_PALABRA = { un: 1, una: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10 };
+const NUM_PALABRA = { un: 1, una: 1, uno: 1, otra: 1, otro: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10 };
 const conPalabraTipo = (n) => PALABRAS_TIPO.some((w) => new RegExp(`(^|[^a-zñ])${w}([^a-zñ]|$)`).test(n));
 function pideSinTipo(texto) {
   if (!TIPOS.length) return false;
@@ -1018,7 +1207,7 @@ function tituloTipo(id) {
   const t = w.join(" ");
   return cortar(`${t.charAt(0).toUpperCase() + t.slice(1)} ${pesos(PRODUCTOS[id].precio)}`, 20);
 }
-async function preguntarTipo(c, pre = "", cantidad = null) {
+async function preguntarTipo(c, pre = "", cantidad = null, { conMeme = true } = {}) {
   const disponibles = TIPOS.filter((id) => !agotados.has(id));
   if (!disponibles.length) return false;
   if (c.paso === "tipo") c.pasoVeces++;
@@ -1028,7 +1217,7 @@ async function preguntarTipo(c, pre = "", cantidad = null) {
   }
   if (c.pasoVeces >= 3) return false; // ya se le preguntó: que la IA le explique con sus palabras
   c.cantidadPendiente = cantidad;
-  await enviarMeme(c, "aclarar");
+  if (conMeme) await memeAntes(c, "aclarar");
   const texto = `${pre}${PREGUNTA_TIPO}`;
   recordar(c, "assistant", texto);
   await enviarBotones(
@@ -1095,12 +1284,34 @@ async function siguientePaso(c, r, avisos = []) {
     if (r?.mostrar_menu || !r?.respuesta) return enviarMenu(c, r?.respuesta || "¿Qué se te antoja? 😊");
     return pregunta(c, "productos", r.respuesta);
   }
-  if (r?.falta_aclarar && r.respuesta) return pregunta(c, "aclarar", pre + r.respuesta);
+  if (r?.falta_aclarar && r.respuesta) {
+    const llevo = eco(pre, listaCarrito(c.carrito)).replace(/^Anotado:/, "Llevo:");
+    return pregunta(c, "aclarar", pre + llevo + r.respuesta);
+  }
 
   const sinOpcion = c.carrito.find((i) => PRODUCTOS[i.id].opciones?.length && !i.nota);
   if (sinOpcion) {
     const p = PRODUCTOS[sinOpcion.id];
-    return pregunta(c, "opcion", `${pre}Para ${sinOpcion.cantidad}x ${p.nombre}, ¿de cuál? Tenemos: ${p.opciones.join(", ")}`);
+    const textoOpcion = `${pre}Para ${sinOpcion.cantidad}x ${p.nombre}, ¿de cuál? Tenemos: ${p.opciones.join(", ")}`;
+    // Sabores con un toque (lista); si la lista no sale, queda la pregunta escrita
+    if (p.opciones.length >= 2 && p.opciones.length <= 10 && c.paso !== "opcion") {
+      const cuerpo = `${pre}${CORTO ? `¿De cuál? 👇` : `Para ${sinOpcion.cantidad}x ${p.nombre}, ¿de cuál? 👇`}`;
+      const r = await enviar(c.num, {
+        type: "interactive",
+        interactive: {
+          type: "list",
+          body: { text: cortar(cuerpo, 1024) },
+          action: { button: "Elegir", sections: [{ title: cortar(p.corto || p.nombre, 24), rows: p.opciones.map((o, i) => ({ id: `op:${sinOpcion.id}:${i}`, title: cortar(o, 24) })) }] },
+        },
+      });
+      if (r.ok) {
+        c.paso = "opcion";
+        c.pasoVeces = 1;
+        recordar(c, "assistant", textoOpcion);
+        return r;
+      }
+    }
+    return pregunta(c, "opcion", textoOpcion);
   }
 
   // Venía eligiendo de la lista: ofrecer agregar otra cosa antes de seguir
@@ -1128,14 +1339,8 @@ async function siguientePaso(c, r, avisos = []) {
     const bebidas = IDS.filter((id) => esBebida(id) && !agotados.has(id));
     const yaTiene = c.carrito.some((i) => esBebida(i.id) || PRODUCTOS[i.id].incluyeBebida);
     if (bebidas.length && !yaTiene) {
-      const nombres = bebidas
-        .map((id) => {
-          const n = PRODUCTOS[id].corto || PRODUCTOS[id].nombre;
-          return n.charAt(0).toLowerCase() + n.slice(1);
-        })
-        .join(", ");
-      await enviarMeme(c, "bebida");
-      return pregunta(c, "bebida", `${pre}${eco(pre, lista)}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombres}.`);
+      await memeAntes(c, "bebida");
+      return ofrecerBebida(c, `${pre}${ecoUnaVez(c, pre, lista)}`);
     }
   }
 
@@ -1143,7 +1348,7 @@ async function siguientePaso(c, r, avisos = []) {
     if (!c.barrio) {
       const llegamos = BARRIOS.length ? `\n(Llegamos a ${BARRIOS.join(", ")})` : "";
       if (c.ubicacion) return pregunta(c, "direccion", `${pre}¿Y en qué barrio es? 🏠${llegamos}`);
-      return pregunta(c, "direccion", `${pre}${eco(pre, lista)}¿A dónde te lo llevamos? Dime el barrio, la dirección y una referencia 🏠${llegamos}`);
+      return pregunta(c, "direccion", `${pre}${ecoUnaVez(c, pre, lista)}¿A dónde te lo llevamos? Dime el barrio, la dirección y una referencia 🏠${llegamos}`);
     }
     const cubierto = barrioCubierto(c);
     if (!cubierto) return barrioNoCubierto(c);
@@ -1195,6 +1400,17 @@ async function siguientePaso(c, r, avisos = []) {
       }
       return pregunta(c, "pago", `${pre}El pago es en efectivo al recibir 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
     }
+    // No quedó claro cómo paga: con Nequi, se le vuelven a mostrar los botones (una vez más) en vez de suponer efectivo
+    if (NEQUI && (c.vecesPago || 0) < 1) {
+      c.vecesPago = (c.vecesPago || 0) + 1;
+      c.paso = "pago";
+      const texto = `${pre}¿Me confirmas cómo pagas? 👇`;
+      recordar(c, "assistant", texto);
+      return enviarBotones(c.num, texto, [
+        ["pago_nequi", "💜 Nequi"],
+        ["pago_efectivo", "💵 Efectivo"],
+      ], "Escríbeme *Nequi* o *efectivo*");
+    }
     c.pago = "efectivo";
   }
   return enviarResumen(c, pre);
@@ -1209,7 +1425,7 @@ async function enviarResumen(c, pre = "") {
   txt += `\n*Total: ${pesos(total)}*`;
   txt += `\n${textoEntrega(c)}`;
   txt += `\n${textoPago(c, total)}`;
-  if (SALSAS.porDefecto || c.salsas) txt += `\n🌶️ Salsas: ${c.salsas || SALSAS.porDefecto} (incluidas)`;
+  if (c.salsas || (SALSAS_EN_RESUMEN && SALSAS.porDefecto)) txt += `\n🌶️ Salsas: ${c.salsas || SALSAS.porDefecto} (incluidas)`;
   if (c.notas) txt += `\n📝 ${c.notas}`;
   if (!esCambio) txt += `\n⏱️ ${c.entrega === "recoger" ? "Listo en" : "Llega en"} ${tiempoEntrega} aprox.`;
   txt += `\n\n¿Lo confirmo?`;
@@ -1219,15 +1435,11 @@ async function enviarResumen(c, pre = "") {
   c.paso = "resumen";
   c.pasoVeces = 0;
   recordar(c, "assistant", txt);
-  // En WhatsApp, el mensaje más reciente aparece abajo. Si toca meme de resumen,
-  // enviarlo ANTES del resumen para que el cliente vea primero el meme y luego la decisión.
-  if (!esCambio) await enviarMeme(c, "resumen");
-  const r = await enviarBotones(c.num, txt, BOTONES_RESUMEN);
   if (c.pago !== "nequi" && c.pagaCon >= 100000 && c.pagaCon - total >= 50000 && !c.memeCambio) {
     c.memeCambio = true;
-    await enviarMeme(c, "cambio");
+    await memeAntes(c, "cambio");
   }
-  return r;
+  return enviarBotones(c.num, txt, BOTONES_RESUMEN);
 }
 
 const mapa = (u) => `https://maps.google.com/?q=${u.lat},${u.lng}`;
@@ -1332,6 +1544,7 @@ async function confirmarPedido(c) {
   };
   c.comprobantePrevio = false;
   c.estado = "confirmado";
+  if (!anterior) c.ronda = (c.ronda || 0) + 1; // los botones del pedido que se acaba de confirmar ya quedan "viejos"
   c.paso = "";
   c.pasoVeces = 0;
   c.fallos = 0;
@@ -1344,13 +1557,16 @@ async function confirmarPedido(c) {
     msg =
       c.entrega === "recoger"
         ? `¡Confirmado! 🎉 Tu pedido #${codigo} ya está en cocina. Estará listo en ${tiempoEntrega} aprox. en ${LOCAL}. Te aviso cuando esté listo 😊`
+        : CORTO
+        ? `¡Confirmado! 🎉 Pedido #${codigo} en cocina. Llega en ${tiempoEntrega} aprox 🛵`
         : `¡Confirmado! 🎉 Tu pedido #${codigo} ya está en cocina. Llega en ${tiempoEntrega} aprox. Te aviso cuando salga 🛵`;
     if (c.pago === "nequi") msg += `\n\n💜 Transfiere ${pesos(total)} al Nequi *${NEQUI}*${NEQUI_TITULAR ? ` (a nombre de ${NEQUI_TITULAR})` : ""} y mándame el pantallazo por aquí 📸`;
   }
-  await responder(c, msg);
+  // Cocina primero (no se demora por el meme), luego meme y el mensaje concreto al cliente
   await avisarEquipo(textoCocina(c.pedido, anterior, c), EQUIPO, botonesPedido(c.pedido));
   if (c.pedido.entrega !== "recoger") await avisarEquipo(textoDomiciliario(c.pedido, c, Boolean(anterior)));
-  if (!anterior) await enviarMeme(c, "confirmado");
+  if (!anterior) await memeAntes(c, "confirmado");
+  await responder(c, msg);
 }
 
 function restaurarDesdePedido(c) {
@@ -1374,17 +1590,17 @@ async function cancelarPorCliente(c, r) {
   if (!c.pedido) {
     if (!c.carrito.length) return responder(c, r?.respuesta || "¡Listo! 😊 Si se te antoja algo, aquí estoy.");
     Object.assign(c, { carrito: [], estado: "armando", paso: "", pasoVeces: 0, ofrecioBebida: false, ofrecioCompartir: false, preguntoPago: false, pidioUbicacion: false });
+    await memeAntes(c, "cancelado");
     await responder(c, "Listo, no te tomo el pedido 👍 Si se te antoja algo más tarde, aquí estoy 😊");
-    await enviarMeme(c, "cancelado");
     return;
   }
   const p = c.pedido;
   if (p.estado === "recibido" && ahora() - p.ts <= T.cambios) {
     p.estado = "cancelado";
     p.actualizado = ahora();
-    await responder(c, `Listo, cancelé tu pedido #${p.codigo} 👍 Si se te antoja algo más tarde, aquí estoy 😊`);
     await avisarEquipo(`❌ CANCELADO pedido #${p.codigo} (${p.lista}).\nEl cliente lo canceló: NO lo prepares.`);
-    await enviarMeme(c, "cancelado");
+    await memeAntes(c, "cancelado");
+    await responder(c, `Listo, cancelé tu pedido #${p.codigo} 👍 Si se te antoja algo más tarde, aquí estoy 😊`);
     return;
   }
   return pasarAHumano(c, `Quiere cancelar el pedido #${p.codigo}, que ya ${p.estado === "en_camino" ? "salió" : "se está preparando"}`, {
@@ -1557,10 +1773,42 @@ async function procesarTurno(c, entrada) {
     }
     if (t - c.avisoCerrado > 10 * MIN) {
       c.avisoCerrado = t;
+      await memeAntes(c, "cerrado");
       await responder(c, mensajeCerrado());
-      await enviarMeme(c, "cerrado");
     }
     return;
+  }
+
+  // Botones para empezar otro pedido (vienen de la pregunta de abajo)
+  if (entrada.boton === "nuevo_pedido") {
+    empezarPedidoNuevo(c);
+    return enviarMenu(c, `¡Listo! Pedido nuevo ${EMOJI}`);
+  }
+  if (entrada.boton === "nuevo_no") return responder(c, "¡Listo! 😊 Cualquier cosa, aquí estoy.");
+
+  // Tocó un botón de un pedido que ya terminó: no se mezcla con lo de ahora
+  if (entrada.viejo && !["humano", "cambiar"].includes(entrada.boton)) {
+    const p = c.pedido;
+    if (p && ["recibido", "en_camino"].includes(p.estado)) {
+      const estado = p.estado === "en_camino" ? "ya va en camino 🛵" : "ya está en cocina 👩‍🍳";
+      const texto = `Tu pedido #${p.codigo} ${estado} ✅\n¿Quieres hacer otro pedido aparte?`;
+      recordar(c, "assistant", texto);
+      return enviarBotones(c.num, texto, [
+        ["nuevo_pedido", "🆕 Pedido nuevo"],
+        ["nuevo_no", "👍 No, gracias"],
+      ], "Si quieres otro pedido, escríbeme *pedido nuevo* 😊");
+    }
+    if (!entrada.producto) {
+      // Era un paso de un pedido viejo (pago, cantidad, "eso es todo"...): empezar de nuevo
+      if (c.carrito.length || c.estado !== "armando") empezarPedidoNuevo(c);
+      return enviarMenu(c, `Ese botón era de un pedido anterior 😊 Empecemos de nuevo 👇`);
+    }
+    // Tocó un producto viejo sin pedido en curso: arranca un pedido nuevo con ese producto
+    if (c.estado !== "armando") empezarPedidoNuevo(c);
+  }
+  if (/^(pedido nuevo|nuevo pedido|otro pedido)$/.test(n) && c.pedido && ["recibido", "en_camino"].includes(c.pedido.estado)) {
+    empezarPedidoNuevo(c);
+    return enviarMenu(c, `¡Listo! Pedido nuevo ${EMOJI}`);
   }
 
   // C) Atajos sin IA (más rápidos y seguros)
@@ -1570,8 +1818,24 @@ async function procesarTurno(c, entrada) {
   if (entrada.producto) {
     const id = entrada.producto;
     if (agotados.has(id)) {
-      await enviarMeme(c, "agotado");
+      await memeAntes(c, "agotado");
       return responder(c, `Uy, hoy se nos acabó ${PRODUCTOS[id].nombre} 😔 ¿Te provoca otra cosa?`);
+    }
+    // Mensajes cortos: "¿Cuántas?" con botones 1 · 2 · 3 (o escribe el número)
+    if (!c.cantidadPendiente && CORTO && NEGOCIO.preguntarCuantosEnLista !== false) {
+      const p = PRODUCTOS[id];
+      const cuantos = /a$/i.test(String(p.nombre).split(/\s+/)[0]) ? "cuántas" : "cuántos";
+      c.productoPendiente = id;
+      c.paso = "cantidad";
+      c.pasoVeces = 1;
+      if (c.estado === "esperando_confirmacion") c.estado = "armando";
+      if (!esBebida(id) && !c.carrito.some((i) => !esBebida(i.id)) && !c.ofrecioCompartir) {
+        c.ofrecioCompartir = true;
+        await memeAntes(c, "compartir"); // "Cuando piden una sola salchi para compartir" justo antes de preguntar cuántas
+      }
+      const texto = `${p.corto || p.nombre}: ¿${cuantos}? 👇\n(si son más, escríbeme el número)`;
+      recordar(c, "assistant", texto);
+      return enviarBotones(c.num, texto, [1, 2, 3].map((n) => [`cant:${id}:${n}`, tituloCantidadBoton(p, id, n)]), "");
     }
     // Negocios de "por docena" (pasteles, empanadas) prefieren preguntar cuántos; en menu.js: preguntarCuantosEnLista
     if (!c.cantidadPendiente && NEGOCIO.preguntarCuantosEnLista !== false) {
@@ -1581,7 +1845,7 @@ async function procesarTurno(c, entrada) {
       c.pasoVeces = 0;
       c.desdeLista = id;
       if (c.estado === "esperando_confirmacion") c.estado = "armando";
-      return responder(c, `¡Buena elección! 😋 ${p.nombre}: ¿${cuantos} quieres?${p.opciones?.length ? `\nY dime de cuál: ${p.opciones.join(", ")}` : ""}`);
+      return responder(c, `¡Buena elección! 😋 ${p.nombre}: ¿${cuantos} quieres? (${ejemploCantidad(p)})${p.opciones?.length ? `\nY dime de cuál: ${p.opciones.join(", ")}` : ""}`);
     }
     const cantidad = c.cantidadPendiente || 1;
     c.cantidadPendiente = null;
@@ -1593,7 +1857,7 @@ async function procesarTurno(c, entrada) {
     c.pasoVeces = 0;
     if (c.estado === "esperando_confirmacion") c.estado = "armando";
     recordar(c, "user", `[Anotó ${cantidad}x ${PRODUCTOS[id].nombre}]`);
-    return siguientePaso(c, null, ["¡Buena elección! 😋"]);
+    return siguientePaso(c, null, CORTO ? [] : ["¡Buena elección! 😋"]);
   }
 
   // Ubicación GPS: se aprovecha según el momento del pedido
@@ -1642,6 +1906,15 @@ async function procesarTurno(c, entrada) {
   }
 
   // "¿Algo más?": botones o "no, gracias / eso es todo" siguen con el pedido sin gastar modelo
+  if (entrada.boton === "mas_otra" && c.estado !== "confirmado") {
+    if (c.estado === "esperando_confirmacion") c.estado = "armando";
+    if (await preguntarTipo(c, "", null, { conMeme: false })) return;
+    return enviarMenu(c, "Esto es lo que tenemos 😋");
+  }
+  if (entrada.boton === "mas_bebida" && c.estado !== "confirmado") {
+    if (c.estado === "esperando_confirmacion") c.estado = "armando";
+    return ofrecerBebida(c);
+  }
   if (entrada.boton === "mas_agregar") {
     c.paso = "mas";
     const r = await enviarLista(c, "Elige lo que quieras agregar 👇 (o escríbemelo)", "➕ Agregar algo");
@@ -1668,6 +1941,11 @@ async function procesarTurno(c, entrada) {
     }
   }
 
+  // Pago escrito con palabras ("nequi", "neki", "transferencia", "efectivo") = como tocar el botón
+  if (NEQUI && !entrada.boton && c.paso === "pago" && !c.pago && c.carrito.length && texto && n.split(" ").length <= 6 && !/\d/.test(n)) {
+    if (/nequi|neki|nequy|nekii|transfer|transf|consign|bre ?b|llave/.test(n)) entrada.boton = "pago_nequi";
+    else if (/efectivo|efectibo|cash|en plata|contra ?entrega|en billete|billete|al recibir/.test(n)) entrada.boton = "pago_efectivo";
+  }
   // Botones de pago
   if (entrada.boton === "pago_nequi" && c.carrito.length && NEQUI) {
     c.pago = "nequi";
@@ -1681,6 +1959,41 @@ async function procesarTurno(c, entrada) {
     return pregunta(c, "pago", `¡Listo! 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
   }
 
+  // Cantidad: botón 1·2·3 o número escrito cuando se le preguntó "¿cuántas?"
+  if (c.paso === "cantidad" && c.productoPendiente) {
+    let cantidad = null;
+    const b = String(entrada.boton || "");
+    if (b.startsWith("cant:")) {
+      const [, pid, nTxt] = b.split(":");
+      if (pid === c.productoPendiente) cantidad = Number(nTxt);
+    } else if (texto) {
+      const t1 = n.replace(/[^a-z0-9ñ ]/g, " ").trim();
+      const m1 = t1.match(/^(\d{1,2})\b/) || t1.match(new RegExp(`^(${Object.keys(NUM_PALABRA).join("|")})\\b`));
+      if (m1 && t1.split(/\s+/).length <= 4) cantidad = /^\d+$/.test(m1[1]) ? Number(m1[1]) : NUM_PALABRA[m1[1]];
+    }
+    if (cantidad > 0 && cantidad <= 50) {
+      c.cantidadPendiente = cantidad;
+      const id = c.productoPendiente;
+      c.productoPendiente = null;
+      return procesarTurno(c, { producto: id, texto: "", yaRecordado: true });
+    }
+    if (b.startsWith("cant:")) return; // botón viejo de otro producto: se ignora
+    c.productoPendiente = null; // escribió otra cosa: que la IA lo entienda
+  }
+  // Eligió un sabor de la lista (op:producto:número)
+  if (String(entrada.boton || "").startsWith("op:") && c.carrito.length) {
+    const [, pid, idx] = entrada.boton.split(":");
+    const opcion = PRODUCTOS[pid]?.opciones?.[Number(idx)];
+    const item = c.carrito.find((i) => i.id === pid && !i.nota);
+    if (opcion && item) {
+      item.nota = opcion;
+      if (c.estado === "esperando_confirmacion") c.estado = "armando";
+      recordar(c, "user", `[Eligió ${opcion}]`);
+      return siguientePaso(c, null);
+    }
+  }
+  // "No, gracias" desde la lista de bebidas
+  if (entrada.boton === "bebida_no" && c.estado === "armando" && c.carrito.length) return siguientePaso(c, null);
   // "No, así está bien" después de ofrecer bebida: seguir sin gastar modelo
   if (c.paso === "bebida" && c.estado === "armando" && c.carrito.length && esNegacion(texto)) return siguientePaso(c, null);
   // "No tengo datos / no sé cómo" al pedir la ubicación: seguir sin ella
@@ -1750,13 +2063,18 @@ async function procesarTurno(c, entrada) {
   // "Con cuánto paga" solo si el cliente lo dijo de verdad (evita un "pago exacto" inventado)
   if (r.paga_con === 0 && !/exact/.test(n)) r.paga_con = null;
   if (r.paga_con > 0 && !/\d|mil|billete|veinte|treinta|cuarenta|cincuenta|cien/.test(n)) r.paga_con = null;
+  if (puedeCambiar && r.intencion === "pedido") {
+    const base = r.productos.length ? r.productos : c.carrito;
+    const falta = bebidaOlvidada(n, base);
+    if (falta && !c.carrito.some((i) => i.id === falta.id)) r.productos = [...base, falta];
+  }
   if (r.productos.length) {
     const { carrito, quitados } = validarProductos(r.productos);
     c.carrito = carrito;
     c.cantidadPendiente = null;
     if (quitados.length) {
       avisos.push(`Uy, hoy se nos acabó: ${quitados.join(", ")} 😔`);
-      await enviarMeme(c, "agotado");
+      await memeAntes(c, "agotado");
     }
   }
   if (r.entrega === "recoger" && !LOCAL) avisos.push("Por ahora solo hacemos domicilios 🛵");
@@ -1780,9 +2098,8 @@ async function procesarTurno(c, entrada) {
   // F) Ya hay un pedido confirmado
   if (c.pedido) {
     if (!cambio) {
-      await responder(c, unir(avisos, r.respuesta || "¡Con gusto! 😊"));
-      if (r.intencion === "agradecimiento") await enviarMeme(c, "gracias");
-      return;
+      if (r.intencion === "agradecimiento") await memeAntes(c, "gracias");
+      return responder(c, unir(avisos, r.respuesta || "¡Con gusto! 😊"));
     }
     if (c.pedido.estado !== "recibido" || t - c.pedido.ts > T.cambios) {
       const pedido = listaCarrito(c.carrito);
@@ -1809,9 +2126,8 @@ async function procesarTurno(c, entrada) {
       if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) return enviarMenu(c, msg);
       msg += r.intencion === "pregunta" ? "\n\n¿Te anoto algo? 😊" : `\n\n¿Qué se te antoja hoy? ${EMOJI}`;
     }
-    const res = await responder(c, msg);
-    if (r.intencion === "agradecimiento" && !enFlujo) await enviarMeme(c, "gracias");
-    return res;
+    if (r.intencion === "agradecimiento" && !enFlujo) await memeAntes(c, "gracias");
+    return responder(c, msg);
   }
   if (c.estado === "esperando_confirmacion" && !cambio && r.intencion === "confirmar") return confirmarPedido(c);
   return siguientePaso(c, r, avisos);
@@ -1921,7 +2237,8 @@ async function comandoEquipo(a, texto) {
   const arg = resto.join(" ").trim();
   const pedidoDe = (num) => {
     const c = clientePorCodigo(num);
-    const p = c && (c.pedido?.codigo === Number(num) ? c.pedido : c.pedidoAnterior?.codigo === Number(num) ? c.pedidoAnterior : null);
+    const n = Number(num);
+    const p = c && [c.pedido, c.pedidoAnterior, ...(c.pedidosPrevios || [])].find((x) => x?.codigo === n);
     return { c, p };
   };
 
@@ -1976,8 +2293,8 @@ async function comandoEquipo(a, texto) {
       if (!p) return responderA(`No encontré el pedido #${arg}.`);
       p.pagoVerificado = true;
       p.actualizado = ahora();
-      const r = await enviarTexto(c.num, `✅ ¡Pago confirmado! Gracias 💜 ${p.estado === "en_camino" ? "Tu pedido ya va en camino 🛵" : "Tu pedido sigue en cocina y te aviso cuando salga 🛵"}`);
-      if (r.ok) await enviarMeme(c, "nequi");
+      await memeAntes(c, "nequi");
+      await enviarTexto(c.num, `✅ ¡Pago confirmado! Gracias 💜 ${p.estado === "en_camino" ? "Tu pedido ya va en camino 🛵" : "Tu pedido sigue en cocina y te aviso cuando salga 🛵"}`);
       return responderA(`✅ Pago del #${p.codigo} verificado (${pesos(p.total)}).${p.estado === "recibido" ? " Cuando salga, toca 🛵 Salió." : ""}`, botonesPedido(p));
     }
     case "pagomal": {
@@ -2010,11 +2327,11 @@ async function comandoEquipo(a, texto) {
       }
       p.estado = "en_camino";
       p.actualizado = ahora();
+      if (p.entrega !== "recoger") await memeAntes(c, "salio");
       const r = await enviarTexto(
         c.num,
         p.entrega === "recoger" ? `🎉 ¡Tu pedido #${p.codigo} ya está listo! Te esperamos en ${LOCAL}.` : `🛵 ¡Tu pedido #${p.codigo} ya va en camino! Llega en unos minutos.`
       );
-      if (r.ok && p.entrega !== "recoger") await enviarMeme(c, "salio");
       return responderA(r.ok ? `✅ Le avisé al cliente #${p.codigo} que va en camino.` : `⚠️ No pude avisarle al cliente #${p.codigo}.`, botonesPedido(p));
     }
     case "entregado": {
@@ -2022,8 +2339,8 @@ async function comandoEquipo(a, texto) {
       if (!p) return responderA(`No encontré el pedido #${arg}.`);
       p.estado = "entregado";
       p.actualizado = ahora();
-      const r = await enviarTexto(c.num, `¡Gracias por pedir en ${MARCA}! 💛 Que lo disfrutes. Cualquier cosa, aquí estamos.`);
-      if (r.ok) await enviarMeme(c, esDeNoche() ? "entregado_noche" : "entregado");
+      await memeAntes(c, esDeNoche() ? "entregado_noche" : "entregado");
+      await enviarTexto(c.num, `¡Gracias por pedir en ${MARCA}! 💛 Que lo disfrutes. Cualquier cosa, aquí estamos.`);
       return responderA(`✅ Pedido #${p.codigo} entregado.`);
     }
     case "cancelar": {
@@ -2083,7 +2400,7 @@ async function revisarPendientes() {
     // Resumen sin confirmar: un recordatorio
     if (c.estado === "esperando_confirmacion" && !c.humano && !c.recordoConfirmacion && t - c.resumenEnviado > T.recordarConfirmacion) {
       c.recordoConfirmacion = true;
-      await enviarMeme(c, "sin_confirmar");
+      await memeAntes(c, "sin_confirmar");
       await enviarBotones(c.num, "¿Te confirmo el pedido? 😊 Está listo para pasar a cocina.", BOTONES_RESUMEN);
     }
     // Pedido que no ha salido: alerta a cocina
@@ -2186,10 +2503,13 @@ async function recibir(m, nombrePerfil, contacto = null) {
     case "interactive": {
       const resp = m.interactive?.button_reply || m.interactive?.list_reply || {};
       const id = String(resp.id || "");
+      // ¿Tocó un botón de un mensaje de un pedido anterior? (WhatsApp dice a qué mensaje responde)
+      const rondaBoton = rondaDeMensaje.get(m.context?.id);
+      const viejo = rondaBoton !== undefined && rondaBoton < (c.ronda || 0);
       if (id.startsWith("prod:") && PRODUCTOS[id.slice(5)]) {
-        return encolar(num, () => turnoSeguro(c, { producto: id.slice(5), texto: `Quiero ${PRODUCTOS[id.slice(5)].nombre}` }));
+        return encolar(num, () => turnoSeguro(c, { producto: id.slice(5), texto: `Quiero ${PRODUCTOS[id.slice(5)].nombre}`, viejo }));
       }
-      return encolar(num, () => turnoSeguro(c, { boton: id, texto: resp.title || "" }));
+      return encolar(num, () => turnoSeguro(c, { boton: id, texto: resp.title || "", viejo }));
     }
     case "button":
       return acumular(c, m.button?.text || "");
@@ -2232,8 +2552,8 @@ async function responderSticker(c) {
   const enCurso = c.carrito.length || c.estado !== "armando" || (c.pedido && ["recibido", "en_camino"].includes(c.pedido.estado));
   if (enCurso) return;
   c.ultimaActividad = ahora();
-  const yaLosVio = memesDe("sticker").every((f) => (c.memesVistos || []).includes(f));
-  const conMeme = !yaLosVio && (await enviarMeme(c, "sticker"));
+  const yaLosVio = memesDe("sticker").every((f) => (memesVistosPorCliente.get(c.num) || []).includes(f));
+  const conMeme = !yaLosVio && (await memeAntes(c, "sticker"));
   if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) return enviarMenu(c, conMeme ? "Mientras tanto, mira lo que tenemos 😋" : `¡Hola! 👋 Mira lo que tenemos hoy en ${MARCA} ${EMOJI}`);
   if (conMeme) {
     const texto = `¿Qué se te antoja? ${EMOJI} Elige aquí 👇`;
