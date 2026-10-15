@@ -375,7 +375,7 @@ function mensajeCerrado() {
 }
 
 // ======================= CLIENTES (memoria) =======================
-// Nota: vive en la memoria del servidor; si Railway reinicia, se pierde (siguiente paso: Supabase).
+// Vive en la memoria del servidor y se copia a disco cada pocos segundos (ver GUARDADO EN DISCO).
 const clientes = new Map();
 const porCodigo = new Map();
 let contador = 0;
@@ -1551,6 +1551,7 @@ async function confirmarPedido(c) {
   };
   c.comprobantePrevio = false;
   c.estado = "confirmado";
+  guardarEstado(); // un pedido confirmado se guarda de una vez, sin esperar al reloj
   if (!anterior) c.ronda = (c.ronda || 0) + 1; // los botones del pedido que se acaba de confirmar ya quedan "viejos"
   c.paso = "";
   c.pasoVeces = 0;
@@ -2617,6 +2618,80 @@ async function manejarArchivo(c, m) {
   });
 }
 
+// ======================= GUARDADO EN DISCO =======================
+// Clientes, pedidos y códigos se guardan en un archivo para que un reinicio de Railway no los borre.
+// En Railway: crea un Volume y móntalo (ej. en /data); el bot usa esa carpeta solo (RAILWAY_VOLUME_MOUNT_PATH).
+// Sin volumen se guarda en ./datos, que Railway borra en cada despliegue (sirve en local).
+const CARPETA_DATOS = env.DATA_DIR || env.RAILWAY_VOLUME_MOUNT_PATH || path.join(path.dirname(fileURLToPath(import.meta.url)), "datos");
+const ARCHIVO_ESTADO = path.join(CARPETA_DATOS, "estado.json");
+let ultimoGuardado = "";
+
+function guardarEstado() {
+  try {
+    const json = JSON.stringify({
+      version: 1,
+      guardado: ahora(),
+      contador,
+      // memesVistos se reconecta al cargar (es la misma lista que memesVistosPorCliente)
+      clientes: [...clientes.values()].map(({ memesVistos, ...c }) => c),
+      porCodigo: [...porCodigo],
+      agotados: [...agotados],
+      vistos: [...vistos],
+      memesVistosPorCliente: [...memesVistosPorCliente],
+      rondaDeMensaje: [...rondaDeMensaje].slice(-3000),
+    });
+    if (json === ultimoGuardado) return;
+    fs.mkdirSync(CARPETA_DATOS, { recursive: true });
+    // Primero a un archivo temporal y luego se renombra: si se cae a mitad, el archivo anterior queda intacto
+    fs.writeFileSync(`${ARCHIVO_ESTADO}.tmp`, json);
+    fs.renameSync(`${ARCHIVO_ESTADO}.tmp`, ARCHIVO_ESTADO);
+    ultimoGuardado = json;
+  } catch (e) {
+    console.error("No pude guardar el estado:", e.message);
+  }
+}
+
+function cargarEstado() {
+  let d;
+  try {
+    d = JSON.parse(fs.readFileSync(ARCHIVO_ESTADO, "utf8"));
+  } catch (e) {
+    if (e.code !== "ENOENT") console.error("No pude leer el estado guardado (arranca vacío):", e.message);
+    return;
+  }
+  for (const [num, lista] of d.memesVistosPorCliente || []) memesVistosPorCliente.set(num, lista);
+  for (const c of d.clientes || []) {
+    // Un mismo pedido puede estar en pedido, pedidoAnterior y pedidosPrevios: que vuelva a ser el mismo objeto
+    const unicos = new Map();
+    for (const p of [c.pedido, c.pedidoAnterior, ...(c.pedidosPrevios || [])]) if (p && !unicos.has(p.codigo)) unicos.set(p.codigo, p);
+    const mismo = (p) => (p ? unicos.get(p.codigo) : p);
+    c.pedido = mismo(c.pedido);
+    c.pedidoAnterior = mismo(c.pedidoAnterior);
+    if (c.pedidosPrevios) c.pedidosPrevios = [...new Set(c.pedidosPrevios.map(mismo))];
+    if (memesVistosPorCliente.has(c.num)) c.memesVistos = memesVistosPorCliente.get(c.num);
+    clientes.set(c.num, c);
+  }
+  for (const [cod, num] of d.porCodigo || []) porCodigo.set(Number(cod), num);
+  for (const id of d.agotados || []) if (PRODUCTOS[id]) agotados.add(id);
+  for (const id of d.vistos || []) vistos.add(id);
+  for (const [id, ronda] of d.rondaDeMensaje || []) rondaDeMensaje.set(id, ronda);
+  contador = Math.max(Number(d.contador) || 0, ...porCodigo.keys(), 0);
+  ultimoGuardado = "";
+  const activos = [...clientes.values()].filter((c) => c.pedido && ["recibido", "en_camino"].includes(c.pedido.estado)).length;
+  console.log(`Estado recuperado: ${clientes.size} conversación(es), ${activos} pedido(s) activo(s), último código #${contador}`);
+}
+
+cargarEstado();
+const relojGuardado = setInterval(guardarEstado, 5 * 1000);
+relojGuardado.unref?.();
+// Railway manda SIGTERM antes de reiniciar o desplegar: se guarda lo último antes de salir
+for (const senal of ["SIGTERM", "SIGINT"]) {
+  process.on(senal, () => {
+    guardarEstado();
+    process.exit(0);
+  });
+}
+
 // ======================= SERVIDOR =======================
 const app = express();
 app.use(
@@ -2686,6 +2761,9 @@ app.listen(PORT, () => {
     }`
   );
   if (MEMES_ACTIVOS && memesFaltantes.length) console.warn(`⚠️ Memes nombrados en menu.js que NO están en la carpeta memes: ${memesFaltantes.join(", ")}`);
+  console.log(`Guardado: ${ARCHIVO_ESTADO}`);
+  if (env.RAILWAY_ENVIRONMENT && !env.RAILWAY_VOLUME_MOUNT_PATH && !env.DATA_DIR)
+    console.warn("⚠️ Sin Volume en Railway: los pedidos se pierden en cada despliegue. Crea un Volume y móntalo (ej. /data).");
   if (!COCINA) console.warn("⚠️ Falta MI_NUMERO_COCINA: nadie recibirá pedidos ni avisos.");
   if (!GROQ_API_KEY) console.warn("⚠️ Falta GROQ_API_KEY: el bot no podrá entender mensajes.");
 });
