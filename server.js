@@ -678,6 +678,7 @@ async function enviarMeme(c, momento) {
     const archivo = opciones[Math.floor(Math.random() * opciones.length)];
     const r = await enviar(c.num, { type: "image", image: { link: `${urlPublica}/memes/${encodeURIComponent(archivo)}` } });
     if (r.ok) {
+      recordar(c, "assistant", `[Le envié un meme (${momento}) para sacarle una sonrisa]`); // así el modelo sabe de qué habla si el cliente lo comenta
       c.ultimoMeme = ahora();
       c.memesPedido = (c.memesPedido || 0) + 1;
       c.memesVistos.push(archivo);
@@ -1022,7 +1023,7 @@ function promptSistema() {
 Tu meta: que el cliente pida fácil y rápido y se sienta bien atendido.
 Tono: amiguero, cálido y cercano, colombiano neutro, sin jerga paisa. Frases cortas (máximo 2 líneas) y máximo 1 emoji.
 Los clientes escriben con errores, abreviaturas o por nota de voz mal transcrita: interpreta con sentido común (diminutivos como "una salchipapita" = una salchipapa; barrios mal escritos; "una coca" = una Coca-Cola).
-
+${MEMES_ACTIVOS ? `Este negocio manda memes graciosos (imágenes) en momentos del pedido. Si el cliente comenta de risa o de los memes ("jaja qué risa ese meme", "qué memes tan buenos"), responde con humor y en una línea (ej: "Jaja qué bueno que te sacó una sonrisa 😄") y sigue con lo que falta del pedido. Nunca digas que no sabes de qué memes habla ni que eres un bot que no los manda.\n` : ""}
 PRODUCTOS (usa SOLO estos id):
 ${productos}
 Reglas de productos:
