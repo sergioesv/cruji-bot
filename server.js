@@ -105,6 +105,9 @@ const PALABRAS_TIPO = (PT.palabras || []).map((w) => String(w).toLowerCase().nor
 const PREGUNTA_TIPO = String(PT.pregunta || "¿Cuál quieres? 👇").trim();
 // Mensajes cortos (menu.js → mensajesCortos: true): la gente lee la notificación sin abrir el chat
 const CORTO = NEGOCIO.mensajesCortos === true;
+// Botones y listas desplegables en el flujo (tipo, "¿algo más?", bebidas, sabores, menú). Apagado por defecto:
+// el bot habla en texto corrido y los botones quedan solo para el pago y la confirmación (menu.js → botonesEnFlujo)
+const BOTONES_FLUJO = NEGOCIO.botonesEnFlujo === true;
 const SALSAS_EN_MENU = SALSAS.mostrarEnMenu !== false;
 const SALSAS_EN_RESUMEN = SALSAS.mostrarEnResumen !== false;
 
@@ -337,6 +340,29 @@ function menuTexto() {
     if (PEDIDO_MINIMO) alFinal.push(`Pedido mínimo para domicilio: ${pesos(PEDIDO_MINIMO)}`);
   }
   return unir(principales.join("\n\n"), alFinal.join("\n"));
+}
+
+// Menú en un solo párrafo: "salchipapa sencilla ($8.000), de lomo ($12.000) y de chorizo ($12.000). Para tomar: ..."
+function menuParrafo() {
+  const unirY = (a) => (a.length <= 1 ? a.join("") : `${a.slice(0, -1).join(", ")} y ${a.at(-1)}`);
+  const grupos = new Map();
+  for (const id of IDS) {
+    if (agotados.has(id) || esBebida(id) || esCategoria(PRODUCTOS[id].categoria, "salsa")) continue;
+    grupos.set(PRODUCTOS[id].categoria, [...(grupos.get(PRODUCTOS[id].categoria) || []), id]);
+  }
+  const frases = [];
+  for (const ids of grupos.values()) {
+    const nombres = ids.map((id) => String(PRODUCTOS[id].corto || PRODUCTOS[id].nombre).split(/\s+/));
+    // Palabras que todos tienen al principio ("salchipapa") se dicen una sola vez
+    let k = 0;
+    while (nombres.length > 1 && nombres.every((w) => w.length > k + 1 && norm(w[k]) === norm(nombres[0][k]))) k++;
+    frases.push(...ids.map((id, i) => `${minuscula(nombres[i].slice(i === 0 ? 0 : k).join(" "))} (${pesos(PRODUCTOS[id].precio)})`));
+  }
+  const bebidas = IDS.filter((id) => esBebida(id) && !agotados.has(id));
+  const partes = [];
+  if (frases.length) partes.push(`${unirY(frases)}.`);
+  if (bebidas.length) partes.push(`Para tomar: ${minuscula(nombresBebidas())} (desde ${pesos(Math.min(...bebidas.map((id) => PRODUCTOS[id].precio)))}).`);
+  return partes.join(" ");
 }
 
 // ======================= HORARIO =======================
@@ -764,7 +790,16 @@ async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
     c.menuEnviado = ahora();
     return cat;
   }
-  // 2) Sin catálogo: foto del menú (opcional) + carta en texto con lista para elegir
+  // 2) Texto corrido: saludo + qué hay + precios en el mismo párrafo (sin lista desplegable)
+  if (!BOTONES_FLUJO) {
+    const lista = menuParrafo();
+    const cuerpo = `${intro} ${/tenemos/i.test(intro) ? "" : "Hoy tenemos "}${lista} ${CORTO ? "¿Qué se te antoja? 😊" : `¿Qué se te antoja? Escríbeme tu pedido, ej: *${EJEMPLO_PEDIDO || "2 salchipapas y 1 gaseosa"}* 😊`}`;
+    recordar(c, "assistant", cuerpo);
+    const r = await enviarTexto(c.num, cuerpo);
+    if (r.ok) c.menuEnviado = ahora();
+    return r;
+  }
+  // 3) Foto del menú (opcional) + carta en texto con lista para elegir
   if (IMAGEN_MENU) await enviar(c.num, { type: "image", image: { link: IMAGEN_MENU, caption: cortar(intro, 1000) } });
   const cuerpo = CORTO
     ? `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n¿Cuál te provoca? 👇`
@@ -786,6 +821,12 @@ async function preguntarAlgoMas(c, pre = "") {
   const texto = `${pre}${ecoUnaVez(c, pre, listaCarrito(c.carrito))}¿Algo más? 😊`;
   c.paso = "mas";
   c.pasoVeces = 0;
+  if (!BOTONES_FLUJO) {
+    const hayBebida = IDS.some((id) => esBebida(id) && !agotados.has(id)) && !c.carrito.some((i) => esBebida(i.id));
+    const textoLibre = `${texto.replace(/¿Algo más\? 😊$/, "")}¿Algo más? 😊${hayBebida ? " ¿Una bebida?" : ""} Si ya está, dime *eso es todo* 👍`;
+    recordar(c, "assistant", textoLibre);
+    return responder(c, textoLibre);
+  }
   recordar(c, "assistant", texto);
   // Botones directos: [Eso es todo] [Otra salchi] [Bebida]. Sin tipos/bebidas configurados: [Agregar algo]
   const hayTipos = TIPOS.some((id) => !agotados.has(id));
@@ -809,6 +850,7 @@ async function ofrecerBebida(c, pre = "") {
   c.paso = "bebida";
   c.pasoVeces = 0;
   const texto = CORTO ? `${pre}¿Algo de tomar? 🥤 ${nombresBebidas()} 👇` : `${pre}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombresBebidas()}.\nSi no, dime *no, gracias* y seguimos 😊`;
+  if (!BOTONES_FLUJO) return pregunta(c, "bebida", CORTO ? `${pre}¿Algo de tomar? 🥤 ${nombresBebidas()}. Si no, dime *no, gracias* 😊` : texto);
   recordar(c, "assistant", texto);
   const r = await enviarListaBebidas(c, texto);
   if (r.ok) return r;
@@ -1221,6 +1263,14 @@ async function preguntarTipo(c, pre = "", cantidad = null, { conMeme = true } = 
   if (c.pasoVeces >= 3) return false; // ya se le preguntó: que la IA le explique con sus palabras
   c.cantidadPendiente = cantidad;
   if (conMeme) await memeAntes(c, "aclarar");
+  if (!BOTONES_FLUJO) {
+    const opciones = disponibles.map((id) => `${tituloTipo(id).replace(/ \$[\d.]+$/, "").toLowerCase()} (${pesos(PRODUCTOS[id].precio)})`);
+    const lista = opciones.length > 1 ? `${opciones.slice(0, -1).join(", ")} o ${opciones.at(-1)}` : opciones[0];
+    const textoLibre = `${pre}${PREGUNTA_TIPO.replace(/\s*👇\s*$/, "")} Tenemos ${lista} 😊`;
+    recordar(c, "assistant", textoLibre);
+    await enviarTexto(c.num, textoLibre);
+    return true;
+  }
   const texto = `${pre}${PREGUNTA_TIPO}`;
   recordar(c, "assistant", texto);
   await enviarBotones(
@@ -1262,6 +1312,12 @@ async function pregunta(c, paso, texto) {
   return responder(c, texto);
 }
 
+// "Tu total es $22.500 (con domicilio)." para que el cliente sepa con cuánto pagar
+function totalTexto(c) {
+  const { domicilio, total } = calcular(c);
+  return `Tu total es *${pesos(total)}*${domicilio > 0 ? ` (con domicilio de ${pesos(domicilio)})` : ""}. `;
+}
+
 function textoPago(c, total) {
   if (c.pago === "nequi") return "💜 Pago por Nequi";
   if (c.pagaCon === 0 || (c.pagaCon && c.pagaCon === total)) return "💵 Efectivo, pago exacto";
@@ -1297,7 +1353,7 @@ async function siguientePaso(c, r, avisos = []) {
     const p = PRODUCTOS[sinOpcion.id];
     const textoOpcion = `${pre}Para ${sinOpcion.cantidad}x ${p.nombre}, ¿de cuál? Tenemos: ${p.opciones.join(", ")}`;
     // Sabores con un toque (lista); si la lista no sale, queda la pregunta escrita
-    if (p.opciones.length >= 2 && p.opciones.length <= 10 && c.paso !== "opcion") {
+    if (BOTONES_FLUJO && p.opciones.length >= 2 && p.opciones.length <= 10 && c.paso !== "opcion") {
       const cuerpo = `${pre}${CORTO ? `¿De cuál? 👇` : `Para ${sinOpcion.cantidad}x ${p.nombre}, ¿de cuál? 👇`}`;
       const r = await enviar(c.num, {
         type: "interactive",
@@ -1389,7 +1445,7 @@ async function siguientePaso(c, r, avisos = []) {
         // Botones: Nequi primero (es lo que más se usa)
         c.paso = "pago";
         c.pasoVeces = 1;
-        const texto = `${pre}¿Cómo vas a pagar? 👇`;
+        const texto = `${pre}${totalTexto(c)}¿Cómo vas a pagar? 👇`;
         recordar(c, "assistant", texto);
         return enviarBotones(
           c.num,
@@ -1401,7 +1457,7 @@ async function siguientePaso(c, r, avisos = []) {
           "Escríbeme *Nequi* o *efectivo* (y con cuánto pagas, para llevarte el cambio)"
         );
       }
-      return pregunta(c, "pago", `${pre}El pago es en efectivo al recibir 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
+      return pregunta(c, "pago", `${pre}${totalTexto(c)}El pago es en efectivo al recibir 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
     }
     // No quedó claro cómo paga: con Nequi, se le vuelven a mostrar los botones (una vez más) en vez de suponer efectivo
     if (NEQUI && (c.vecesPago || 0) < 1) {
@@ -1964,7 +2020,7 @@ async function procesarTurno(c, entrada) {
   if (entrada.boton === "pago_efectivo" && c.carrito.length) {
     c.pago = "efectivo";
     if (c.estado === "esperando_confirmacion") c.estado = "armando";
-    return pregunta(c, "pago", `¡Listo! 💵 ¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
+    return pregunta(c, "pago", `¡Listo! 💵 ${totalTexto(c)}¿Con cuánto pagas, para llevarte el cambio? (si es exacto, dime "exacto")`);
   }
 
   // Cantidad: botón 1·2·3 o número escrito cuando se le preguntó "¿cuántas?"
