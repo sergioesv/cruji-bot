@@ -106,7 +106,7 @@ const PREGUNTA_TIPO = String(PT.pregunta || "¿Cuál quieres?").trim();
 // Mensajes cortos (menu.js → mensajesCortos: true): la gente lee la notificación sin abrir el chat
 const CORTO = NEGOCIO.mensajesCortos === true;
 // Primer mensaje: el cliente debe saber desde el inicio que habla con un bot (menu.js → avisoBot para cambiar el texto)
-const AVISO_BOT = String(NEGOCIO.avisoBot || `Soy el bot de ${MARCA} 🤖 y te ayudo a armar tu pedido.`).trim();
+const AVISO_BOT = String(NEGOCIO.avisoBot || `Soy el bot de ${MARCA} 🤖.`).trim();
 // Botones y listas desplegables en el flujo (tipo, "¿algo más?", bebidas, sabores, menú). Apagado por defecto:
 // el bot habla en texto corrido y los botones quedan solo para el pago y la confirmación (menu.js → botonesEnFlujo)
 const BOTONES_FLUJO = NEGOCIO.botonesEnFlujo === true;
