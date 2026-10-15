@@ -190,7 +190,7 @@ export const NEGOCIO = {
  */
 export const MEMES = {
   activo: true, // false = el bot no manda ningún meme
-  probabilidad: 0.5, // 0.5 = la mitad de las veces · 1 = siempre · 0.3 = de vez en cuando
+  probabilidad: 0.6, // 0.5 = la mitad de las veces · 1 = siempre · 0.3 = de vez en cuando
   maximoPorPedido: 3, // máximo de memes en una misma conversación (para que no canse)
   pausaSaludoSegundos: 5, // después del meme del saludo, espera esto antes de mandar el menú (solo si salió meme)
   pausaSegundos: 2.5, // la misma pausa en los demás momentos (corta, para no demorar el pedido)
