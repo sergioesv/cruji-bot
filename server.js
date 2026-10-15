@@ -461,6 +461,13 @@ function recordar(c, role, content) {
   if (!content) return;
   c.historial.push({ role, content: cortar(content, 1500) });
   while (c.historial.length > 14) c.historial.shift();
+  if (role === "assistant") c.ecos = [...(c.ecos || []), { k: suave(content), ts: ahora() }].slice(-6);
+}
+// ¿La respuesta del modelo repite algo que el bot acaba de mandar? (el modelo a veces copia el historial)
+function esEco(c, texto) {
+  const k = suave(texto);
+  if (k.length < 25) return false;
+  return (c.ecos || []).some((e) => ahora() - e.ts < 3 * MIN && (e.k.includes(k) || k.includes(e.k)));
 }
 
 function guardarPedidoPrevio(c) {
@@ -491,6 +498,7 @@ function empezarPedidoNuevo(c) {
     pidioUbicacion: false,
     estado: "armando",
     recordoConfirmacion: false,
+    ultimoResumenHash: "",
     pedido: null,
     fallos: 0,
     paso: "",
@@ -529,6 +537,7 @@ function reiniciarSiHaceFalta(c) {
     pidioUbicacion: false,
     estado: "armando",
     recordoConfirmacion: false,
+    ultimoResumenHash: "",
     pedido: null,
     fallos: 0,
     paso: "",
@@ -580,7 +589,10 @@ async function enviar(to, payload) {
     const err = e.response?.data?.error;
     console.error(`Error enviando a ${to}:`, JSON.stringify(err || e.message));
     alertaToken(err?.code);
-    return { ok: false, codigo: err?.code };
+    // Sin respuesta (timeout, red) o error interno de Meta: el mensaje pudo haber llegado igual.
+    // Se marca "incierto" para no mandar un respaldo que el cliente vería repetido.
+    const incierto = !e.response || e.response.status >= 500 || [1, 2, 131000].includes(Number(err?.code));
+    return { ok: false, codigo: err?.code, incierto };
   }
 }
 
@@ -607,6 +619,11 @@ async function enviarBotones(to, texto, botones, respaldo = "Responde *SÍ* para
     },
   });
   if (r.ok) return r;
+  // Si no se sabe si los botones llegaron, NO se manda el mismo texto otra vez (era la causa de los mensajes duplicados)
+  if (r.incierto) {
+    console.warn(`Botones a ${to} sin confirmación de Meta: no se reenvían en texto para no duplicar`);
+    return r;
+  }
   return enviarTexto(to, respaldo ? `${texto}\n\n${respaldo}` : texto);
 }
 const BOTONES_RESUMEN = [
@@ -1497,9 +1514,32 @@ async function siguientePaso(c, r, avisos = []) {
   return enviarResumen(c, pre);
 }
 
+// Firma de lo que muestra el resumen: si no cambió nada, el resumen no se vuelve a mandar
+const firmaResumen = (c, total) =>
+  JSON.stringify([
+    c.carrito.map((i) => [i.id, i.cantidad, suave(i.nota)]).sort(),
+    c.entrega,
+    suave(c.barrio),
+    suave(c.direccion),
+    c.ubicacion,
+    c.pago,
+    c.pagaCon,
+    suave(c.salsas),
+    suave(c.notas),
+    total,
+    c.pedido?.codigo || 0,
+  ]);
+
 async function enviarResumen(c, pre = "") {
   const { domicilio, total, detalleDomicilio } = calcular(c);
   const esCambio = Boolean(c.pedido);
+  const firma = firmaResumen(c, total);
+  if (c.estado === "esperando_confirmacion" && c.ultimoResumenHash === firma) {
+    // Mismo pedido, mismo resumen: no se repite. Si pasó un rato, solo se recuerda con los botones.
+    if (!pre && ahora() - (c.resumenEnviado || 0) < 2 * MIN) return { ok: true, repetido: true };
+    c.resumenEnviado = ahora();
+    return enviarBotones(c.num, `${pre}¿Te confirmo el pedido de arriba? 👆`, BOTONES_RESUMEN);
+  }
   let txt = `${pre}${esCambio ? `📝 Así quedaría tu pedido #${c.pedido.codigo} con el cambio:` : "📝 Este es tu pedido:"}\n`;
   txt += c.carrito.map((i) => `• ${i.cantidad}x ${nombreItem(i)} — ${pesos(PRODUCTOS[i.id].precio * i.cantidad)}`).join("\n");
   if (domicilio) txt += `\n• Domicilio${detalleDomicilio ? ` (${detalleDomicilio})` : ""} — ${pesos(domicilio)}`;
@@ -1516,6 +1556,7 @@ async function enviarResumen(c, pre = "") {
   txt += `\n\n¿Lo confirmo?`;
   c.estado = "esperando_confirmacion";
   c.resumenEnviado = ahora();
+  c.ultimoResumenHash = firma;
   c.recordoConfirmacion = false;
   c.paso = "resumen";
   c.pasoVeces = 0;
@@ -1629,6 +1670,7 @@ async function confirmarPedido(c) {
   };
   c.comprobantePrevio = false;
   c.estado = "confirmado";
+  c.ultimoResumenHash = "";
   guardarEstado(); // un pedido confirmado se guarda de una vez, sin esperar al reloj
   if (!anterior) c.ronda = (c.ronda || 0) + 1; // los botones del pedido que se acaba de confirmar ya quedan "viejos"
   c.paso = "";
@@ -1644,15 +1686,19 @@ async function confirmarPedido(c) {
       c.entrega === "recoger"
         ? `¡Confirmado! 🎉 Tu pedido #${codigo} ya está en cocina. Estará listo en ${tiempoEntrega} aprox. en ${LOCAL}. Te aviso cuando esté listo 😊`
         : CORTO
-        ? `¡Confirmado! 🎉 Pedido #${codigo} en cocina. Llega en ${tiempoEntrega} aprox 🛵`
+        ? `¡Confirmado! 🎉 Pedido #${codigo} en cocina. Llega en ${tiempoEntrega} aprox. 🛵`
         : `¡Confirmado! 🎉 Tu pedido #${codigo} ya está en cocina. Llega en ${tiempoEntrega} aprox. Te aviso cuando salga 🛵`;
-    if (c.pago === "nequi") msg += `\n\n💜 Transfiere ${pesos(total)} al Nequi *${NEQUI}*${NEQUI_TITULAR ? ` (a nombre de ${NEQUI_TITULAR})` : ""} y mándame el pantallazo por aquí 📸`;
   }
+  const datosNequi =
+    !anterior && c.pago === "nequi"
+      ? `💜 Transfiere ${pesos(total)} al Nequi *${NEQUI}*${NEQUI_TITULAR ? ` (a nombre de ${NEQUI_TITULAR})` : ""} y mándame el pantallazo por aquí 📸`
+      : "";
   // Cocina primero (no se demora por el meme), luego meme y el mensaje concreto al cliente
   await avisarEquipo(textoCocina(c.pedido, anterior, c), EQUIPO, botonesPedido(c.pedido));
   if (c.pedido.entrega !== "recoger") await avisarEquipo(textoDomiciliario(c.pedido, c, Boolean(anterior)));
   if (!anterior) await memeAntes(c, "confirmado");
   await responder(c, msg);
+  if (datosNequi) await responder(c, datosNequi);
 }
 
 function restaurarDesdePedido(c) {
@@ -2203,6 +2249,7 @@ async function procesarTurno(c, entrada) {
   // F) Ya hay un pedido confirmado
   if (c.pedido) {
     if (!cambio) {
+      if (!avisos.length && r.respuesta && esEco(c, r.respuesta)) return console.log(`Respuesta repetida del modelo para ${c.num}: no se envía`);
       if (r.intencion === "agradecimiento") await memeAntes(c, "gracias");
       return responder(c, unir(avisos, r.respuesta || "¡Con gusto! 😊"));
     }
@@ -2223,6 +2270,7 @@ async function procesarTurno(c, entrada) {
   const enFlujo = c.carrito.length > 0 && FLUJO.has(c.paso);
   const hablaDelPedido = cambio || ["pedido", "confirmar"].includes(r.intencion) || (enFlujo && !["pregunta", "saludo"].includes(r.intencion));
   if (!hablaDelPedido) {
+    if (!avisos.length && r.respuesta && esEco(c, r.respuesta)) return console.log(`Respuesta repetida del modelo para ${c.num}: no se envía`);
     let msg = unir(avisos, r.respuesta || "¿En qué te ayudo? 😊");
     if (c.estado === "esperando_confirmacion") msg += "\n\n(Tu pedido sigue esperando que lo confirmes 😊)";
     else if (enFlujo && RECORDATORIO_PASO[c.paso] && !r.falta_aclarar && !/\?\s*$/.test(r.respuesta)) msg += `\n\n${RECORDATORIO_PASO[c.paso]}`; // una sola pregunta a la vez
@@ -2629,6 +2677,7 @@ async function recibir(m, nombrePerfil, contacto = null) {
   }
 
   const c = obtenerCliente(num, nombrePerfil);
+  c.ultimoMensajeProcesado = m.id;
   marcarLeido(m.id);
 
   switch (m.type) {
@@ -2652,6 +2701,10 @@ async function recibir(m, nombrePerfil, contacto = null) {
     case "interactive": {
       const resp = m.interactive?.button_reply || m.interactive?.list_reply || {};
       const id = String(resp.id || "");
+      // Doble toque: WhatsApp manda dos mensajes con ids distintos, pero mismo botón del mismo mensaje
+      const toque = `${m.context?.id || ""}|${id}`;
+      if (m.context?.id && (c.botonesUsados || []).includes(toque)) return console.log(`Botón repetido de ${num} ignorado (${id})`);
+      c.botonesUsados = [...(c.botonesUsados || []), toque].slice(-30);
       // ¿Tocó un botón de un mensaje de un pedido anterior? (WhatsApp dice a qué mensaje responde)
       const rondaBoton = rondaDeMensaje.get(m.context?.id);
       const viejo = rondaBoton !== undefined && rondaBoton < (c.ronda || 0);
