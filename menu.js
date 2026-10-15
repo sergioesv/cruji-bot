@@ -128,7 +128,7 @@ export const NEGOCIO = {
   preguntarTipo: {
     palabras: ["salchipapa", "salchipapas", "salchi", "salchis", "salchipapita", "salchipapitas"],
     productos: ["salchipapa_sencilla", "salchipapa_lomo", "salchipapa_chorizo"],
-    pregunta: "¿Cuál salchipapa quieres? 👇",
+    pregunta: "¿Cuál salchipapa quieres?",
     botonOtra: "🍟 Otra salchi", // botón en "¿Algo más?" (máximo 20 letras)
   },
 

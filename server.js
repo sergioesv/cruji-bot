@@ -102,9 +102,11 @@ const ahora = () => Date.now() + (globalThis.__desfaseTiempo || 0);
 const PT = NEGOCIO.preguntarTipo || {};
 const TIPOS = (PT.productos || []).filter((id) => PRODUCTOS[id]).slice(0, 3);
 const PALABRAS_TIPO = (PT.palabras || []).map((w) => String(w).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")).filter(Boolean);
-const PREGUNTA_TIPO = String(PT.pregunta || "¿Cuál quieres? 👇").trim();
+const PREGUNTA_TIPO = String(PT.pregunta || "¿Cuál quieres?").trim();
 // Mensajes cortos (menu.js → mensajesCortos: true): la gente lee la notificación sin abrir el chat
 const CORTO = NEGOCIO.mensajesCortos === true;
+// Primer mensaje: el cliente debe saber desde el inicio que habla con un bot (menu.js → avisoBot para cambiar el texto)
+const AVISO_BOT = String(NEGOCIO.avisoBot || `Soy el bot de ${MARCA} 🤖 y te ayudo a armar tu pedido.`).trim();
 // Botones y listas desplegables en el flujo (tipo, "¿algo más?", bebidas, sabores, menú). Apagado por defecto:
 // el bot habla en texto corrido y los botones quedan solo para el pago y la confirmación (menu.js → botonesEnFlujo)
 const BOTONES_FLUJO = NEGOCIO.botonesEnFlujo === true;
@@ -781,7 +783,7 @@ async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
   // 2) Texto en renglones: saludo, un producto por línea, bebidas en negrita y la pregunta (sin lista desplegable)
   if (!BOTONES_FLUJO) {
     const cierre = CORTO ? "¿Qué se te antoja? 😊" : `¿Qué se te antoja? Escríbeme tu pedido, ej: *${EJEMPLO_PEDIDO || "2 salchipapas y 1 gaseosa"}* 😊`;
-    const cuerpo = unir(`${intro}${/tenemos/i.test(intro) ? "" : " Hoy tenemos:"}`, menuRenglones(), cierre);
+    const cuerpo = `${intro}${/tenemos/i.test(intro) ? "" : " Hoy tenemos:"}\n${menuRenglones()}\n\n${cierre}`;
     recordar(c, "assistant", cuerpo);
     const r = await enviarTexto(c.num, cuerpo);
     if (r.ok) c.menuEnviado = ahora();
@@ -790,8 +792,8 @@ async function enviarMenu(c, intro = "¡Claro! Este es nuestro menú 😋") {
   // 3) Foto del menú (opcional) + carta en texto con lista para elegir
   if (IMAGEN_MENU) await enviar(c.num, { type: "image", image: { link: IMAGEN_MENU, caption: cortar(intro, 1000) } });
   const cuerpo = CORTO
-    ? `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n¿Cuál te provoca? 👇`
-    : `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n${CONSEJO_TODO_JUNTO}\n\n¿Qué se te antoja? Escríbeme o elige aquí 👇`;
+    ? `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n¿Cuál te provoca?`
+    : `${IMAGEN_MENU ? "" : intro + "\n\n"}${menuTexto()}\n\n${CONSEJO_TODO_JUNTO}\n\n¿Qué se te antoja? Escríbeme o elige aquí`;
   recordar(c, "assistant", cuerpo);
   let r = await enviarLista(c, cuerpo);
   if (!r.ok) r = await enviarTexto(c.num, cuerpo);
@@ -811,7 +813,7 @@ async function preguntarAlgoMas(c, pre = "") {
   c.pasoVeces = 0;
   if (!BOTONES_FLUJO) {
     const hayBebida = IDS.some((id) => esBebida(id) && !agotados.has(id)) && !c.carrito.some((i) => esBebida(i.id));
-    const textoLibre = `${texto.replace(/¿Algo más\? 😊$/, "")}¿Algo más? 😊${hayBebida ? " ¿Una bebida?" : ""} Si ya está, dime *eso es todo* 👍`;
+    const textoLibre = `${texto.replace(/¿Algo más\? 😊$/, "")}¿Algo más? 😊${hayBebida ? " ¿Una bebida?" : ""} Si ya está, dime *eso es todo*`;
     recordar(c, "assistant", textoLibre);
     return responder(c, textoLibre);
   }
@@ -837,7 +839,7 @@ async function ofrecerBebida(c, pre = "") {
   c.ofrecioBebida = true;
   c.paso = "bebida";
   c.pasoVeces = 0;
-  const texto = CORTO ? `${pre}¿Algo de tomar? 🥤 ${nombresBebidas()} 👇` : `${pre}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombresBebidas()}.\nSi no, dime *no, gracias* y seguimos 😊`;
+  const texto = CORTO ? `${pre}¿Algo de tomar? 🥤 ${nombresBebidas()}` : `${pre}¿Le agregamos algo de tomar? 🥤 Tenemos ${nombresBebidas()}.\nSi no, dime *no, gracias* y seguimos 😊`;
   if (!BOTONES_FLUJO) return pregunta(c, "bebida", CORTO ? `${pre}¿Algo de tomar? 🥤 ${nombresBebidas()}. Si no, dime *no, gracias* 😊` : texto);
   recordar(c, "assistant", texto);
   const r = await enviarListaBebidas(c, texto);
@@ -1174,13 +1176,13 @@ function primerNombre(c) {
 // Un saludo nunca se queda en "hola": lleva directo al pedido
 async function saludar(c) {
   const nombre = primerNombre(c);
-  const hola = `¡Hola${nombre ? ", " + nombre : ""}! 👋`;
+  const hola = `*¡Hola${nombre ? ", " + nombre : ""}!*`;
   const p = c.pedido;
   if (p && ["recibido", "en_camino"].includes(p.estado)) {
     const estado = p.estado === "en_camino" ? "ya va en camino 🛵" : `está en cocina 👩‍🍳 (lleva ${minutosDesde(p.ts)} min)`;
     return responder(c, `${hola} Tu pedido #${p.codigo} ${estado}. ¿Te ayudo con algo más?`);
   }
-  if (c.estado === "esperando_confirmacion") return enviarResumen(c, `${hola} Tu pedido está listo para confirmar 👇\n\n`);
+  if (c.estado === "esperando_confirmacion") return enviarResumen(c, `${hola} Tu pedido está listo para confirmar\n\n`);
   if (c.carrito.length) {
     const sigo = `${hola} Seguimos con tu pedido: ${listaCarrito(c.carrito)} 😊`;
     if (c.paso === "aclarar") return responder(c, `${sigo}\n${RECORDATORIO_PASO.aclarar}`);
@@ -1188,7 +1190,7 @@ async function saludar(c) {
   }
   if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) {
     await memeAntes(c, c.pedidoAnterior ? "cliente_que_vuelve" : "saludo", PAUSA_SALUDO); // la pausa solo si salió meme
-    return enviarMenu(c, CORTO ? `${hola} Hoy tenemos:` : `${hola} Te damos la bienvenida a ${MARCA} ${EMOJI}${LEMA ? " " + LEMA : ""}`);
+    return enviarMenu(c, `${hola} ${AVISO_BOT} Hoy tenemos:`); // se aclara desde el primer mensaje que es un bot
   }
   return responder(c, `${hola} ¿Qué se te antoja hoy? 😊 (Si quieres ver el menú otra vez, escribe *menú*)`);
 }
@@ -1255,7 +1257,7 @@ async function preguntarTipo(c, pre = "", cantidad = null, { conMeme = true } = 
   if (!BOTONES_FLUJO) {
     const opciones = disponibles.map((id) => `${tituloTipo(id).replace(/ \$[\d.]+$/, "").toLowerCase()} (${pesos(PRODUCTOS[id].precio)})`);
     const lista = opciones.length > 1 ? `${opciones.slice(0, -1).join(", ")} o ${opciones.at(-1)}` : opciones[0];
-    const textoLibre = `${pre}${PREGUNTA_TIPO.replace(/\s*👇\s*$/, "")} Tenemos ${lista} 😊`;
+    const textoLibre = `${pre}${PREGUNTA_TIPO} Tenemos ${lista} 😊`;
     recordar(c, "assistant", textoLibre);
     await enviarTexto(c.num, textoLibre);
     return true;
@@ -1295,7 +1297,7 @@ async function pregunta(c, paso, texto) {
   if (c.pasoVeces >= 3) {
     return pasarAHumano(c, `El cliente no logra completar este paso del pedido: ${paso}`, {
       tipo: "pedido",
-      mensaje: `Para no enredarte más, te paso ${CON_QUIEN} y te ayuda a terminar el pedido 🙌 Te escribe en unos minutos.`,
+      mensaje: `Para no enredarte más, te paso ${CON_QUIEN} y te ayuda a terminar el pedido. Te escribe en unos minutos.`,
     });
   }
   return responder(c, texto);
@@ -1345,7 +1347,7 @@ async function siguientePaso(c, r, avisos = []) {
     const textoOpcion = `${pre}Para ${sinOpcion.cantidad}x ${p.nombre}, ¿de cuál? Tenemos: ${p.opciones.join(", ")}`;
     // Sabores con un toque (lista); si la lista no sale, queda la pregunta escrita
     if (BOTONES_FLUJO && p.opciones.length >= 2 && p.opciones.length <= 10 && c.paso !== "opcion") {
-      const cuerpo = `${pre}${CORTO ? `¿De cuál? 👇` : `Para ${sinOpcion.cantidad}x ${p.nombre}, ¿de cuál? 👇`}`;
+      const cuerpo = `${pre}${CORTO ? `¿De cuál?` : `Para ${sinOpcion.cantidad}x ${p.nombre}, ¿de cuál?`}`;
       const r = await enviar(c.num, {
         type: "interactive",
         interactive: {
@@ -1436,7 +1438,7 @@ async function siguientePaso(c, r, avisos = []) {
         // Botones: Nequi primero (es lo que más se usa)
         c.paso = "pago";
         c.pasoVeces = 1;
-        const texto = `${pre}${totalTexto(c)}¿Cómo vas a pagar? 👇`;
+        const texto = `${pre}${totalTexto(c)}¿Cómo vas a pagar?`;
         recordar(c, "assistant", texto);
         return enviarBotones(
           c.num,
@@ -1454,7 +1456,7 @@ async function siguientePaso(c, r, avisos = []) {
     if (NEQUI && (c.vecesPago || 0) < 1) {
       c.vecesPago = (c.vecesPago || 0) + 1;
       c.paso = "pago";
-      const texto = `${pre}¿Me confirmas cómo pagas? 👇`;
+      const texto = `${pre}¿Me confirmas cómo pagas?`;
       recordar(c, "assistant", texto);
       return enviarBotones(c.num, texto, [
         ["pago_nequi", "💜 Nequi"],
@@ -1646,7 +1648,7 @@ async function cancelarPorCliente(c, r) {
     if (!c.carrito.length) return responder(c, r?.respuesta || "¡Listo! 😊 Si se te antoja algo, aquí estoy.");
     Object.assign(c, { carrito: [], estado: "armando", paso: "", pasoVeces: 0, ofrecioBebida: false, ofrecioCompartir: false, preguntoPago: false, pidioUbicacion: false });
     await memeAntes(c, "cancelado");
-    await responder(c, "Listo, no te tomo el pedido 👍 Si se te antoja algo más tarde, aquí estoy 😊");
+    await responder(c, "Listo, no te tomo el pedido. Si se te antoja algo más tarde, aquí estoy 😊");
     return;
   }
   const p = c.pedido;
@@ -1655,7 +1657,7 @@ async function cancelarPorCliente(c, r) {
     p.actualizado = ahora();
     await avisarEquipo(`❌ CANCELADO pedido #${p.codigo} (${p.lista}).\nEl cliente lo canceló: NO lo prepares.`);
     await memeAntes(c, "cancelado");
-    await responder(c, `Listo, cancelé tu pedido #${p.codigo} 👍 Si se te antoja algo más tarde, aquí estoy 😊`);
+    await responder(c, `Listo, cancelé tu pedido #${p.codigo}. Si se te antoja algo más tarde, aquí estoy 😊`);
     return;
   }
   return pasarAHumano(c, `Quiere cancelar el pedido #${p.codigo}, que ya ${p.estado === "en_camino" ? "salió" : "se está preparando"}`, {
@@ -1677,7 +1679,7 @@ async function responderEstado(c) {
   }
   return pasarAHumano(c, `Pregunta por su pedido #${p.codigo}: lleva ${min} min y no ha salido`, {
     tipo: "queja",
-    mensaje: `Perdón por la demora 🙏 Ya le estoy preguntando a cocina por tu pedido #${p.codigo} y te escriben ya mismo.`,
+    mensaje: `Perdón por la demora. Ya le estoy preguntando a cocina por tu pedido #${p.codigo} y te escriben ya mismo.`,
   });
 }
 
@@ -1716,8 +1718,8 @@ async function pasarAHumano(c, motivo, { tipo = "persona", mensaje, extra } = {}
   const msg =
     mensaje ||
     (estaAbierto
-      ? `Te paso ${CON_QUIEN} para ayudarte mejor 🙌 Te escribe por aquí en unos minutos.`
-      : `Ya le dejé tu mensaje ${A_QUIEN} 🙏 Te responde apenas pueda.`);
+      ? `Te paso ${CON_QUIEN} para ayudarte mejor. Te escribe por aquí en unos minutos.`
+      : `Ya le dejé tu mensaje ${A_QUIEN}. Te responde apenas pueda.`);
   await responder(c, msg);
 
   const ultimos = c.historial
@@ -1756,7 +1758,7 @@ async function revisarPersonas() {
     if (h.recordatorios === 0 && espera >= T.esperaPersona) {
       h.recordatorios = 1;
       h.escalado = true;
-      await responder(c, `Sigues en mi lista 🙏 Ya le avisé de nuevo ${A_QUIEN}, ya casi te responde.`);
+      await responder(c, `Sigues en mi lista. Ya le avisé de nuevo ${A_QUIEN}, ya casi te responde.`);
       await avisarEquipo(`⏰ #${c.codigo} lleva ${min} min esperando respuesta (${h.motivo}).\nResponde: #${c.codigo} tu mensaje · o devuélvelo al bot: #${c.codigo} bot`);
       continue;
     }
@@ -1765,12 +1767,12 @@ async function revisarPersonas() {
       h.recordatorios = 2;
       if (h.tipo === "consulta" || h.tipo === "persona") {
         liberarDeHumano(c);
-        await responder(c, `Perdón la espera 🙏 Mientras te responden, te sigo atendiendo yo: si quieres pedir, dime qué se te antoja 😊`);
+        await responder(c, `Perdón la espera. Mientras te responden, te sigo atendiendo yo: si quieres pedir, dime qué se te antoja 😊`);
         await avisarEquipo(`⏰ #${c.codigo} lleva ${min} min sin respuesta. El bot volvió a atenderlo, pero su pregunta sigue pendiente: #${c.codigo} tu mensaje`);
       } else {
         await responder(
           c,
-          `Perdón la espera 🙏 Tu caso está marcado como prioritario y te responden apenas se libere alguien.${TELEFONO ? ` Si es urgente, llámanos al ${TELEFONO}.` : ""}`
+          `Perdón la espera. Tu caso está marcado como prioritario y te responden apenas se libere alguien.${TELEFONO ? ` Si es urgente, llámanos al ${TELEFONO}.` : ""}`
         );
         await avisarEquipo(`🚨 #${c.codigo} lleva ${min} min SIN RESPUESTA (${h.motivo}).\nResponde: #${c.codigo} tu mensaje`);
       }
@@ -1823,7 +1825,7 @@ async function procesarTurno(c, entrada) {
     if (QUEJA_RAPIDA.test(n) || PIDE_HUMANO.test(n)) {
       return pasarAHumano(c, "Mensaje fuera de horario", {
         tipo: "queja",
-        mensaje: `Ahora estamos cerrados, pero ya le dejé tu mensaje ${A_QUIEN} 🙏 Te responde apenas pueda.`,
+        mensaje: `Ahora estamos cerrados, pero ya le dejé tu mensaje ${A_QUIEN}. Te responde apenas pueda.`,
       });
     }
     if (t - c.avisoCerrado > 10 * MIN) {
@@ -1856,7 +1858,7 @@ async function procesarTurno(c, entrada) {
     if (!entrada.producto) {
       // Era un paso de un pedido viejo (pago, cantidad, "eso es todo"...): empezar de nuevo
       if (c.carrito.length || c.estado !== "armando") empezarPedidoNuevo(c);
-      return enviarMenu(c, `Ese botón era de un pedido anterior 😊 Empecemos de nuevo 👇`);
+      return enviarMenu(c, `Ese botón era de un pedido anterior 😊 Empecemos de nuevo`);
     }
     // Tocó un producto viejo sin pedido en curso: arranca un pedido nuevo con ese producto
     if (c.estado !== "armando") empezarPedidoNuevo(c);
@@ -1888,7 +1890,7 @@ async function procesarTurno(c, entrada) {
         c.ofrecioCompartir = true;
         await memeAntes(c, "compartir"); // "Cuando piden una sola salchi para compartir" justo antes de preguntar cuántas
       }
-      const texto = `${p.corto || p.nombre}: ¿${cuantos}? 👇\n(si son más, escríbeme el número)`;
+      const texto = `${p.corto || p.nombre}: ¿${cuantos}?\n(si son más, escríbeme el número)`;
       recordar(c, "assistant", texto);
       return enviarBotones(c.num, texto, [1, 2, 3].map((n) => [`cant:${id}:${n}`, tituloCantidadBoton(p, id, n)]), "");
     }
@@ -1972,7 +1974,7 @@ async function procesarTurno(c, entrada) {
   }
   if (entrada.boton === "mas_agregar") {
     c.paso = "mas";
-    const r = await enviarLista(c, "Elige lo que quieras agregar 👇 (o escríbemelo)", "➕ Agregar algo");
+    const r = await enviarLista(c, "Elige lo que quieras agregar (o escríbemelo)", "➕ Agregar algo");
     return r.ok ? r : enviarMenu(c, "Esto es lo que tenemos 😋");
   }
   if ((entrada.boton === "mas_fin" || (c.paso === "mas" && esNegacion(texto))) && c.estado === "armando" && c.carrito.length) {
@@ -2088,7 +2090,7 @@ async function procesarTurno(c, entrada) {
   if (r.necesita_humano) {
     return pasarAHumano(c, "Pregunta que el bot no sabe responder", {
       tipo: "consulta",
-      mensaje: `Esa te la responde mejor ${ENCARGADO || "alguien del equipo"} 🙌 Ya le pasé tu pregunta, te escribe en unos minutos.`,
+      mensaje: `Esa te la responde mejor ${ENCARGADO || "alguien del equipo"}. Ya le pasé tu pregunta, te escribe en unos minutos.`,
     });
   }
   if (r.frustrado) {
@@ -2097,7 +2099,7 @@ async function procesarTurno(c, entrada) {
     if (c.fallos >= 2) {
       return pasarAHumano(c, "Cliente molesto o el bot no lo entiende", {
         tipo: "persona",
-        mensaje: `Perdón si no te estoy entendiendo 🙏 Te paso ${CON_QUIEN} ya mismo.`,
+        mensaje: `Perdón si no te estoy entendiendo. Te paso ${CON_QUIEN} ya mismo.`,
       });
     }
   }
@@ -2148,7 +2150,7 @@ async function procesarTurno(c, entrada) {
   if (r.direccion) c.direccion = r.direccion;
   if (r.nombre) c.nombre = r.nombre;
   if (r.pago === "nequi" && !NEQUI) {
-    avisos.push("Por ahora recibimos solo efectivo 🙏");
+    avisos.push("Por ahora recibimos solo efectivo");
     c.pago = "efectivo";
   } else if (r.pago) c.pago = r.pago;
   if (r.paga_con !== null) c.pagaCon = r.paga_con > 0 && r.paga_con < 1000 ? r.paga_con * 1000 : r.paga_con;
@@ -2368,7 +2370,7 @@ async function comandoEquipo(a, texto) {
       const razon = motivo.join(" ").trim();
       await pasarAHumano(c, `Pago por Nequi NO verificado del pedido #${p.codigo} (${pesos(p.total)})${razon ? `: ${razon}` : ""}`, {
         tipo: "pedido",
-        mensaje: `Uy 😕 No vemos tu pago de ${pesos(p.total)} en nuestro Nequi${razon ? ` (${razon})` : ""}. ¿Lo revisas porfa? Si ya pagaste, mándame otra vez el comprobante 📸, o dime si prefieres pagar en efectivo al recibir. Tu pedido queda apartado mientras tanto 🙏`,
+        mensaje: `Uy 😕 No vemos tu pago de ${pesos(p.total)} en nuestro Nequi${razon ? ` (${razon})` : ""}. ¿Lo revisas porfa? Si ya pagaste, mándame otra vez el comprobante 📸, o dime si prefieres pagar en efectivo al recibir. Tu pedido queda apartado mientras tanto`,
         extra: `Si ya llegó: /pagook ${p.codigo} · Si paga en efectivo, escríbele: #${c.codigo} listo, pagas en efectivo`,
       });
       return responderA(`❌ Le avisé al #${p.codigo} que el pago no aparece. El chat quedó contigo.`);
@@ -2661,9 +2663,9 @@ async function responderSticker(c) {
   c.ultimaActividad = ahora();
   const yaLosVio = memesDe("sticker").every((f) => (memesVistosPorCliente.get(c.num) || []).includes(f));
   const conMeme = !yaLosVio && (await memeAntes(c, "sticker"));
-  if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) return enviarMenu(c, conMeme ? "Mientras tanto, mira lo que tenemos 😋" : `¡Hola! 👋 Mira lo que tenemos hoy en ${MARCA} ${EMOJI}`);
+  if (!c.menuEnviado || ahora() - c.menuEnviado > MENU_RECIENTE) return enviarMenu(c, conMeme ? "Mientras tanto, mira lo que tenemos 😋" : `¡Hola! Mira lo que tenemos hoy en ${MARCA} ${EMOJI}`);
   if (conMeme) {
-    const texto = `¿Qué se te antoja? ${EMOJI} Elige aquí 👇`;
+    const texto = `¿Qué se te antoja? ${EMOJI} Elige aquí`;
     recordar(c, "assistant", texto);
     return enviarLista(c, texto);
   }
@@ -2698,15 +2700,15 @@ async function manejarArchivo(c, m) {
   if (esComprobante) {
     if (p) {
       p.comprobante = true;
-      if (p.pagoVerificado) return responder(c, "¡Recibido! 🙌 Tu pago ya está confirmado 💜");
-      return responder(c, "¡Recibido! 🙌 Tu pedido ya está en cocina 👩‍🍳 y estamos verificando el pago. Te aviso apenas quede confirmado 💜");
+      if (p.pagoVerificado) return responder(c, "¡Recibido! Tu pago ya está confirmado 💜");
+      return responder(c, "¡Recibido! Tu pedido ya está en cocina 👩‍🍳 y estamos verificando el pago. Te aviso apenas quede confirmado 💜");
     }
     c.comprobantePrevio = true;
-    return responder(c, "¡Recibido! 🙌 Apenas confirmes el pedido lo verificamos 💜");
+    return responder(c, "¡Recibido! Apenas confirmes el pedido lo verificamos 💜");
   }
   return pasarAHumano(c, `Envió ${tipo === "image" ? "una imagen" : "un archivo"}`, {
     tipo: "persona",
-    mensaje: `¡Recibido! 🙌 Se lo paso ${A_QUIEN} para que lo revise. Te escribe en unos minutos.`,
+    mensaje: `¡Recibido! Se lo paso ${A_QUIEN} para que lo revise. Te escribe en unos minutos.`,
   });
 }
 
