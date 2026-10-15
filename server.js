@@ -2302,6 +2302,7 @@ const AYUDA = () => `🤖 COMANDOS ${MARCA.toUpperCase()}
 /demora 50 · /demora normal → tiempo de entrega
 /cerrar · /abrir → pausar o reanudar pedidos
 /pedidos → pedidos y clientes pendientes
+/borrarmemoria si → borra todas las conversaciones y pedidos guardados (empieza de cero)
 
 ⚠️ Escríbele algo al bot cada día (por ejemplo /abrir al empezar): WhatsApp solo deja que el bot te mande avisos si le escribiste en las últimas 24 horas.`;
 
@@ -2419,6 +2420,24 @@ async function comandoEquipo(a, texto) {
           },
         },
       });
+    }
+    case "borrarmemoria": {
+      if (norm(arg) !== "si") {
+        return responderA(
+          "⚠️ Esto borra TODAS las conversaciones y pedidos guardados (también los que están en cocina) y los códigos vuelven a empezar en #1. Los productos agotados se mantienen.\nPara hacerlo escribe: /borrarmemoria si"
+        );
+      }
+      for (const b of rafagas.values()) clearTimeout(b.timer); // mensajes a medio juntar de clientes que se van a borrar
+      rafagas.clear();
+      const cuantos = clientes.size;
+      clientes.clear();
+      porCodigo.clear();
+      memesVistosPorCliente.clear();
+      rondaDeMensaje.clear();
+      contador = 0;
+      guardarEstado();
+      console.log(`Memoria borrada desde ${a}: ${cuantos} conversación(es)`);
+      return responderA(`🧹 Memoria borrada: ${cuantos} conversación(es). El bot arranca de cero y el próximo pedido será el #1.`);
     }
     case "abrir":
       cerradoManual = false;
