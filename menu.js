@@ -58,7 +58,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["gaseosa", "gaseosas", "coca cola", "cocacola", "coca", "postobon", "colombiana", "manzana", "uva"],
     opciones: ["Coca-Cola", "Coca-Cola sin azúcar", "Postobón manzana", "Postobón uva", "Colombiana"],
-    enLista: false,
+    enLista: true,
   },
   gaseosa_grande: {
     nombre: "Gaseosa 1.5 L",
@@ -67,7 +67,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["gaseosa grande", "litro y medio", "1.5", "1,5", "gaseosa familiar"],
     opciones: ["Coca-Cola", "Postobón manzana", "Colombiana"],
-    enLista: false,
+    enLista: true,
   },
   agua: {
     nombre: "Agua 600 ml",
@@ -76,7 +76,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["agua", "botella de agua", "agua con gas"],
     opciones: ["Sin gas", "Con gas"],
-    enLista: false,
+    enLista: true,
   },
   jugo: {
     nombre: "Jugo Hit 500 ml",
@@ -85,7 +85,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["jugo", "jugos", "hit"],
     opciones: ["Mango", "Mora", "Lulo", "Naranja-piña"],
-    enLista: false,
+    enLista: true,
   },
   te_frio: {
     nombre: "Té frío 400 ml",
@@ -94,7 +94,7 @@ export const PRODUCTOS = {
     categoria: "🥤 Bebidas",
     alias: ["te", "te frio", "mr tea"],
     opciones: ["Durazno", "Limón"],
-    enLista: false,
+    enLista: true,
   },
 };
 
@@ -103,14 +103,10 @@ export const PRODUCTOS = {
 export const SALSAS = {
   incluidas: ["Salsa rosada", "Salsa de piña", "Mayonesa", "Salsa de tomate"],
   porDefecto: "Todas las salsas de la casa",
-  mostrarEnMenu: false, // false = el menú no habla de salsas (van incluidas igual)
-  mostrarEnResumen: false, // false = el resumen solo las menciona si el cliente pidió algo especial ("sin piña")
 };
 
 export const NEGOCIO = {
   // ---------- IDENTIDAD (cómo se presenta el bot) ----------
-  resumenBebidas: "Gaseosa, agua, jugo Hit o té frío", // cómo se nombran las bebidas al ofrecerlas (corto)
-  mensajesCortos: true, // true = saludo, menú y respuestas cortos (la gente lee la notificación sin abrir el chat)
   marca: "Pedidito", // nombre del negocio que dice el bot. Cámbialo por la marca de las salchipapas si tienen una.
   emoji: "🍟",
   lema: "Salchipapas recién hechas, a domicilio.",
@@ -119,7 +115,7 @@ export const NEGOCIO = {
   reglasProductos: `- Si dice "salchipapa" o "salchipapas" sin decir cuál, no adivines: pregunta si la quiere sencilla, de lomo o de chorizo, y pon falta_aclarar = true.
 - "salchi" o "salchipapita" = salchipapa.`,
 
-  // Al elegir de la lista: true = pregunta "¿cuántas?" con botones 1 · 2 · 3 · false = anota 1 y sigue
+  // Al elegir de la lista: false = se anota 1 de una y se pregunta "¿Algo más?" · true = primero pregunta cuántos
   preguntarCuantosEnLista: true,
 
   // Cuando el cliente pide "una salchipapa" sin decir cuál, el bot pregunta con botones (máximo 3 productos).
@@ -128,7 +124,6 @@ export const NEGOCIO = {
     palabras: ["salchipapa", "salchipapas", "salchi", "salchis", "salchipapita", "salchipapitas"],
     productos: ["salchipapa_sencilla", "salchipapa_lomo", "salchipapa_chorizo"],
     pregunta: "¿Cuál salchipapa quieres? 👇",
-    botonOtra: "🍟 Otra salchi", // botón en "¿Algo más?" (máximo 20 letras)
   },
 
   // Quién atiende cuando el bot pasa la conversación a una persona (aparece en los mensajes al cliente)
@@ -191,22 +186,21 @@ export const MEMES = {
   activo: true, // false = el bot no manda ningún meme
   probabilidad: 0.5, // 0.5 = la mitad de las veces · 1 = siempre · 0.3 = de vez en cuando
   maximoPorPedido: 3, // máximo de memes en una misma conversación (para que no canse)
-  pausaSaludoSegundos: 5, // después del meme del saludo, espera esto antes de mandar el menú (solo si salió meme)
-  pausaSegundos: 2.5, // la misma pausa en los demás momentos (corta, para no demorar el pedido)
-  siempre: ["sticker", "confirmado"], // momentos en los que el meme sale siempre (no cuentan en el máximo)
+  siempre: ["sticker", "resumen"], // sticker y meme previo al resumen salen siempre (no cuentan en el máximo)
   horaNoche: "21", // desde esta hora (formato 24 h) se usa "entregado_noche" en vez de "entregado"
 
   momentos: {
-    saludo: ["saludo.jpg", "mesada.jpg", "saludo_3.jpg", "saludo_4.jpg"], // cliente nuevo saluda (va con el menú)
+    saludo: ["saludo.jpg", "mesada.jpg"], // cliente nuevo saluda (va con el menú)
     cliente_que_vuelve: ["cliente_que_vuelve.jpg"], // saluda alguien que ya había pedido
-    aclarar: ["aclarar.jpg", "aclarar_2.jpg"], // pidió "una salchi" sin decir cuál
-    compartir: ["compartir.jpg", "compartir_2.jpg", "compartir_3.jpg"], // pidió una sola salchipapa (en el "¿Algo más?")
+    aclarar: ["aclarar.jpg"], // pidió "una salchi" sin decir cuál
+    compartir: ["compartir.jpg"], // pidió una sola salchipapa (en el "¿Algo más?")
     bebida: ["bebida.jpg"], // se le ofrece bebida
+    resumen: ["confirmado.jpg", "confirmado_2.jpg"], // antes del resumen de confirmación
     cambio: ["cambio.jpg"], // paga con billete de $100.000 o más
-    confirmado: ["confirmado.jpg", "confirmado_2.jpg", "confirmado_3.jpg"], // confirmó el pedido
-    sin_confirmar: ["sin_confirmar.jpg", "sin_confirmar_2.jpg"], // no confirmó el resumen en 10 minutos
-    nequi: ["nequi.jpg"], // cocina verificó el pago de Nequi (/pagook)
-    salio: ["salio.jpg", "salio_2.jpg", "salio_3.jpg"], // /salio desde cocina
+    confirmado: ["confirmado.jpg", "confirmado_2.jpg"], // confirmó el pedido
+    sin_confirmar: ["sin_confirmar.jpg"], // no confirmó el resumen en 10 minutos
+    nequi: ["nequi.jpg"], // mandó el comprobante de Nequi
+    salio: ["salio.jpg", "salio_2.jpg"], // /salio desde cocina
     entregado: ["entregado.jpg"], // /entregado de día
     entregado_noche: ["entregado_noche.jpg"], // /entregado de noche
     gracias: ["gracias.jpg", "gracias_2.jpg", "gracias_3.jpg"], // el cliente da las gracias
