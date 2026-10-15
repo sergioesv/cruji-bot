@@ -482,6 +482,9 @@ function empezarPedidoNuevo(c) {
     ofrecioCompartir: false,
     memeCambio: false,
     memesPedido: 0,
+    turnoUltimoMeme: 0,
+    reaccionPositivaMeme: false,
+    turnosCliente: 0,
     cantidadPendiente: null,
     productoPendiente: null,
     pidioTelefono: false,
@@ -516,6 +519,9 @@ function reiniciarSiHaceFalta(c) {
     ofrecioCompartir: false,
     memeCambio: false,
     memesPedido: 0,
+    turnoUltimoMeme: 0,
+    reaccionPositivaMeme: false,
+    turnosCliente: 0,
     cantidadPendiente: null,
     productoPendiente: null,
     vecesPago: 0,
@@ -637,13 +643,26 @@ try {
   /* sin carpeta de memes: no se mandan */
 }
 const MEMES_ACTIVOS = MEMES.activo !== false && memesEnCarpeta.size > 0;
-const PROB_MEME = Math.min(1, Math.max(0, Number(env.MEMES_PROBABILIDAD ?? MEMES.probabilidad ?? 0.5)));
-const MEMES_SIEMPRE = new Set(MEMES.siempre || ["sticker"]);
-const MAX_MEMES = Math.max(0, Number(env.MEMES_MAXIMO ?? MEMES.maximoPorPedido ?? 3)); // por conversación, para no cansar
-const HORA_NOCHE = aMinutos(MEMES.horaNoche || "21") ?? 21 * 60;
+const PROB_MEME = Math.min(1, Math.max(0, Number(env.MEMES_PROBABILIDAD ?? MEMES.probabilidad ?? 0.55)));
+const PROB_POR_MOMENTO = MEMES.probabilidadPorMomento || {};
+const MEMES_SIEMPRE = new Set(MEMES.siempre || []);
+const MAX_MEMES_CORTA = Math.max(0, Number(MEMES.maximoConversacionCorta ?? 1));
+const MAX_MEMES_LARGA = Math.max(MAX_MEMES_CORTA, Number(env.MEMES_MAXIMO ?? MEMES.maximoConversacionLarga ?? 2));
+const UMBRAL_CONVERSACION_LARGA = Math.max(2, Number(MEMES.mensajesParaConversacionLarga ?? 4));
+const TURNOS_ENTRE_MEMES = Math.max(1, Number(MEMES.mensajesEntreMemes ?? 3));
+const MS_ENTRE_MEMES = Math.max(0, Number(MEMES.segundosEntreMemes ?? 45) * 1000);
+const HORA_NOCHE = aMinutos(MEMES.horaNoche || "22:30") ?? 22 * 60 + 30;
 // Dirección pública: PUBLIC_URL, o la que Railway da sola, o la que usa Meta para llamar al webhook
 let urlPublica = String(env.PUBLIC_URL || (env.RAILWAY_PUBLIC_DOMAIN ? `https://${env.RAILWAY_PUBLIC_DOMAIN}` : "")).replace(/\/+$/, "");
-const memesDe = (momento) => (MEMES.momentos?.[momento] || []).filter((f) => memesEnCarpeta.has(f));
+const memeCumpleCondicion = (archivo) => {
+  const regla = MEMES.condiciones?.[archivo];
+  if (!regla) return true;
+  const p = PRODUCTOS[regla.producto];
+  if (!p) return false;
+  if (regla.precioExacto != null && Number(p.precio) !== Number(regla.precioExacto)) return false;
+  return true;
+};
+const memesDe = (momento) => (MEMES.momentos?.[momento] || []).filter((f) => memesEnCarpeta.has(f) && memeCumpleCondicion(f));
 const memesFaltantes = Object.values(MEMES.momentos || {})
   .flat()
   .filter((f) => !memesEnCarpeta.has(f));
@@ -652,13 +671,21 @@ const memesVistosPorCliente = new Map();
 // Manda un meme del momento (si toca). Nunca rompe el flujo: si falla, sigue como si nada.
 async function enviarMeme(c, momento) {
   try {
-    if (!MEMES_ACTIVOS || !urlPublica || c.humano) return false;
-    if (c.sinMemesHasta && ahora() < c.sinMemesHasta) return false; // estuvo molesto o con una queja
+    if (!MEMES_ACTIVOS || !urlPublica || c.humano || c.memesDesactivados) return false;
+    if (c.sinMemesHasta && ahora() < c.sinMemesHasta) return false;
     const lista = memesDe(momento);
     if (!lista.length) return false;
-    if (!MEMES_SIEMPRE.has(momento) && Math.random() >= PROB_MEME) return false;
-    if (ahora() - (c.ultimoMeme || 0) < 15 * 1000) return false; // máximo uno por turno
-    if (!MEMES_SIEMPRE.has(momento) && (c.memesPedido || 0) >= MAX_MEMES) return false; // ya van suficientes en este pedido
+    const prob = Math.min(1, Math.max(0, Number(PROB_POR_MOMENTO[momento] ?? PROB_MEME)));
+    if (!MEMES_SIEMPRE.has(momento) && Math.random() >= prob) return false;
+    if (ahora() - (c.ultimoMeme || 0) < MS_ENTRE_MEMES) return false;
+    const turnos = c.turnosCliente || 0;
+    const maximo = turnos >= UMBRAL_CONVERSACION_LARGA ? MAX_MEMES_LARGA : MAX_MEMES_CORTA;
+    if (!MEMES_SIEMPRE.has(momento) && (c.memesPedido || 0) >= maximo) return false;
+    // Un segundo meme requiere conversación larga y, además, separación o una reacción positiva.
+    if ((c.memesPedido || 0) >= 1) {
+      const separados = turnos - (c.turnoUltimoMeme || 0) >= TURNOS_ENTRE_MEMES;
+      if (turnos < UMBRAL_CONVERSACION_LARGA || (!separados && !c.reaccionPositivaMeme)) return false;
+    }
     // Memes que ya vio este cliente (se guardan aparte para recordarlos entre pedidos, aunque pasen días)
     if (!memesVistosPorCliente.has(c.num)) memesVistosPorCliente.set(c.num, []);
     c.memesVistos = memesVistosPorCliente.get(c.num);
@@ -669,7 +696,9 @@ async function enviarMeme(c, momento) {
     if (r.ok) {
       recordar(c, "assistant", `[Le envié un meme (${momento}) para sacarle una sonrisa]`); // así el modelo sabe de qué habla si el cliente lo comenta
       c.ultimoMeme = ahora();
+      c.turnoUltimoMeme = c.turnosCliente || 0;
       c.memesPedido = (c.memesPedido || 0) + 1;
+      c.reaccionPositivaMeme = false;
       c.memesVistos.push(archivo);
       if (c.memesVistos.length > 60) c.memesVistos.shift();
       if (memesVistosPorCliente.size > 5000) memesVistosPorCliente.delete(memesVistosPorCliente.keys().next().value);
@@ -680,8 +709,8 @@ async function enviarMeme(c, momento) {
   }
 }
 // Meme primero, una pausa corta y luego el mensaje concreto: así la notificación que ve el cliente es la útil
-const PAUSA_SALUDO = Number(env.PAUSA_MEME_MS ?? (Number(MEMES.pausaSaludoSegundos ?? 5) * 1000));
-const PAUSA_PEDIDO = Number(env.PAUSA_MEME_MS ?? (Number(MEMES.pausaSegundos ?? 2.5) * 1000));
+const PAUSA_SALUDO = Number(env.PAUSA_MEME_MS ?? (Number(MEMES.pausaSaludoSegundos ?? 1.2) * 1000));
+const PAUSA_PEDIDO = Number(env.PAUSA_MEME_MS ?? (Number(MEMES.pausaSegundos ?? 0.6) * 1000));
 const esperarMs = (ms) => new Promise((r) => setTimeout(r, ms));
 async function memeAntes(c, momento, pausa = PAUSA_PEDIDO) {
   const ok = await enviarMeme(c, momento);
@@ -1675,6 +1704,7 @@ async function responderEstado(c) {
   if (p.estado === "en_camino") return responder(c, `¡Tu pedido #${p.codigo} ya va en camino! 🛵 Llega en unos minutos.`);
   if (p.estado === "cancelado") return responder(c, `Tu pedido #${p.codigo} fue cancelado. Si quieres, te tomo uno nuevo 😊`);
   if (min < minutosMaximosEntrega()) {
+    await memeAntes(c, "en_cocina");
     return responder(c, `Tu pedido #${p.codigo} está en cocina 👩‍🍳 (lleva ${min} min). Te aviso apenas ${p.entrega === "recoger" ? "esté listo" : "salga"} 🛵`);
   }
   return pasarAHumano(c, `Pregunta por su pedido #${p.codigo}: lleva ${min} min y no ha salido`, {
@@ -1802,6 +1832,21 @@ async function procesarTurno(c, entrada) {
   const texto = String(entrada.texto || "").trim();
   if (texto && !entrada.yaRecordado) recordar(c, "user", texto);
   c.ultimoTexto = texto;
+  if (texto) c.turnosCliente = (c.turnosCliente || 0) + 1;
+  const textoNorm = norm(texto);
+  if (/\b(sin memes?|no (me )?mandes memes?|no quiero memes?|quita los memes?)\b/.test(textoNorm)) {
+    c.memesDesactivados = true;
+    if (!c.carrito.length && !c.pedido) return responder(c, "Listo, seguimos sin memes 👍");
+  }
+  else if (/\b(con memes?|quiero memes?|activa los memes?|memes si|memes sí)\b/.test(textoNorm)) {
+    c.memesDesactivados = false;
+  }
+  if (/\b(rapido|rápido|de afan|de afán|tengo afan|tengo afán|entro a clase|sin tanta vuelta)\b/.test(textoNorm)) {
+    silenciarMemes(c, 30);
+  }
+  if (/jaj+a|jej+e|xd+|que caja|qué caja|que risa|qué risa|buen meme|me dio risa|😂|🤣/.test(textoNorm)) {
+    c.reaccionPositivaMeme = true;
+  }
 
   // A) Conversación en manos de una persona: el bot solo reenvía
   if (c.humano) {
@@ -1875,7 +1920,7 @@ async function procesarTurno(c, entrada) {
   if (entrada.producto) {
     const id = entrada.producto;
     if (agotados.has(id)) {
-      await memeAntes(c, "agotado");
+      if (id === "salchipapa_chorizo") await memeAntes(c, "agotado_chorizo"); // el meme habla de la de chorizo
       return responder(c, `Uy, hoy se nos acabó ${PRODUCTOS[id].nombre} 😔 ¿Te provoca otra cosa?`);
     }
     // Mensajes cortos: "¿Cuántas?" con botones 1 · 2 · 3 (o escribe el número)
@@ -1886,10 +1931,6 @@ async function procesarTurno(c, entrada) {
       c.paso = "cantidad";
       c.pasoVeces = 1;
       if (c.estado === "esperando_confirmacion") c.estado = "armando";
-      if (!esBebida(id) && !c.carrito.some((i) => !esBebida(i.id)) && !c.ofrecioCompartir) {
-        c.ofrecioCompartir = true;
-        await memeAntes(c, "compartir"); // "Cuando piden una sola salchi para compartir" justo antes de preguntar cuántas
-      }
       const texto = `${p.corto || p.nombre}: ¿${cuantos}?\n(si son más, escríbeme el número)`;
       recordar(c, "assistant", texto);
       return enviarBotones(c.num, texto, [1, 2, 3].map((n) => [`cant:${id}:${n}`, tituloCantidadBoton(p, id, n)]), "");
@@ -2138,7 +2179,7 @@ async function procesarTurno(c, entrada) {
     c.cantidadPendiente = null;
     if (quitados.length) {
       avisos.push(`Uy, hoy se nos acabó: ${quitados.join(", ")} 😔`);
-      await memeAntes(c, "agotado");
+      if (quitados.includes(PRODUCTOS.salchipapa_chorizo?.nombre)) await memeAntes(c, "agotado_chorizo"); // el meme habla de la de chorizo
     }
   }
   if (r.entrega === "recoger" && !LOCAL) avisos.push("Por ahora solo hacemos domicilios 🛵");

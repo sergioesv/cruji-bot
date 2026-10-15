@@ -190,30 +190,59 @@ export const NEGOCIO = {
  */
 export const MEMES = {
   activo: true, // false = el bot no manda ningún meme
-  probabilidad: 0.6, // 0.5 = la mitad de las veces · 1 = siempre · 0.3 = de vez en cuando
-  maximoPorPedido: 3, // máximo de memes en una misma conversación (para que no canse)
-  pausaSaludoSegundos: 5, // después del meme del saludo, espera esto antes de mandar el menú (solo si salió meme)
-  pausaSegundos: 2.5, // la misma pausa en los demás momentos (corta, para no demorar el pedido)
-  siempre: ["sticker", "confirmado"], // momentos en los que el meme sale siempre (no cuentan en el máximo)
-  horaNoche: "21", // desde esta hora (formato 24 h) se usa "entregado_noche" en vez de "entregado"
+  // Los memes son parte de la marca, pero salen por contexto y no como una ráfaga.
+  probabilidad: 0.55, // respaldo general si un momento no tiene probabilidad propia
+  probabilidadPorMomento: {
+    saludo: 0.45,
+    cliente_que_vuelve: 0.80,
+    aclarar: 0.75,
+    compartir: 0.70,
+    bebida: 0.45,
+    cambio: 0.85,
+    confirmado: 0.70,
+    en_cocina: 0.55,
+    sin_confirmar: 0.65,
+    nequi: 0.75,
+    salio: 0.85,
+    entregado: 0.65,
+    entregado_noche: 0.80,
+    gracias: 0.50,
+    agotado_chorizo: 0.65,
+    cancelado: 0.45,
+    sticker: 0.85,
+  },
+  maximoConversacionCorta: 1, // hasta 3 mensajes del cliente
+  maximoConversacionLarga: 2, // desde 4 mensajes; el segundo exige separación o reacción positiva
+  mensajesParaConversacionLarga: 4,
+  mensajesEntreMemes: 3,
+  segundosEntreMemes: 45,
+  pausaSaludoSegundos: 1.2,
+  pausaSegundos: 0.6,
+  siempre: [], // ningún meme es obligatorio: el momento y el estado del cliente mandan
+  horaNoche: "22:30", // el meme nocturno dice 11 p. m.; se usa desde las 10:30 p. m.
 
   momentos: {
-    saludo: ["saludo.jpg", "mesada.jpg", "saludo_3.jpg", "saludo_4.jpg"], // cliente nuevo saluda (va con el menú)
-    cliente_que_vuelve: ["cliente_que_vuelve.jpg"], // saluda alguien que ya había pedido
-    aclarar: ["aclarar.jpg", "aclarar_2.jpg"], // pidió "una salchi" sin decir cuál
-    compartir: ["compartir.jpg", "compartir_2.jpg", "compartir_3.jpg"], // pidió una sola salchipapa (en el "¿Algo más?")
-    bebida: ["bebida.jpg"], // se le ofrece bebida
-    cambio: ["cambio.jpg"], // paga con billete de $100.000 o más
-    confirmado: ["confirmado.jpg", "confirmado_2.jpg", "confirmado_3.jpg"], // confirmó el pedido
-    sin_confirmar: ["sin_confirmar.jpg", "sin_confirmar_2.jpg"], // no confirmó el resumen en 10 minutos
-    nequi: ["nequi.jpg"], // cocina verificó el pago de Nequi (/pagook)
-    salio: ["salio.jpg", "salio_2.jpg", "salio_3.jpg"], // /salio desde cocina
-    entregado: ["entregado.jpg"], // /entregado de día
-    entregado_noche: ["entregado_noche.jpg"], // /entregado de noche
-    gracias: ["gracias.jpg", "gracias_2.jpg", "gracias_3.jpg"], // el cliente da las gracias
-    agotado: ["agotado.jpg"], // pidió algo que se acabó hoy
-    cancelado: ["cancelado.jpg"], // el CLIENTE canceló (si cancela cocina, no va meme)
-    cerrado: ["cerrado.jpg"], // escribe cuando está cerrado
-    sticker: ["sticker_cliente.jpg"], // el cliente manda un sticker (sin pedido en curso)
+    saludo: ["saludo.jpg", "mesada.jpg", "saludo_3.jpg", "saludo_4.jpg"],
+    cliente_que_vuelve: ["cliente_que_vuelve.jpg"],
+    aclarar: ["aclarar.jpg", "aclarar_2.jpg"],
+    compartir: ["compartir.jpg", "compartir_2.jpg", "compartir_3.jpg"],
+    bebida: ["bebida.jpg"],
+    cambio: ["cambio.jpg"],
+    confirmado: ["confirmado.jpg", "confirmado_3.jpg"],
+    en_cocina: ["confirmado_2.jpg"],
+    sin_confirmar: ["sin_confirmar.jpg", "sin_confirmar_2.jpg"],
+    nequi: ["nequi.jpg"],
+    salio: ["salio.jpg", "salio_2.jpg", "salio_3.jpg"],
+    entregado: ["entregado.jpg"],
+    entregado_noche: ["entregado_noche.jpg"],
+    gracias: ["gracias.jpg", "gracias_2.jpg", "gracias_3.jpg"],
+    agotado_chorizo: ["agotado.jpg"],
+    cancelado: ["cancelado.jpg"],
+    cerrado: ["cerrado.jpg"],
+    sticker: ["sticker_cliente.jpg"],
+  },
+
+  condiciones: {
+    "mesada.jpg": { producto: "salchipapa_sencilla", precioExacto: 8000 },
   },
 };
